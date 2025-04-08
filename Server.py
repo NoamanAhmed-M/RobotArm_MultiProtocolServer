@@ -47,7 +47,7 @@ previous_matrix = [row.copy() for row in matrix]
 #    global matrix
  #   for i in range(3):
  #       for j in range(3):
-            sensor_value = GPIO.input(sensor_pins[i][j])
+            # sensor_value = GPIO.input(sensor_pins[i][j])
             # Assuming: sensor_value == 1 when object is present
  #           matrix[i][j] = 1 if sensor_value else 0
 
@@ -65,7 +65,7 @@ def matrix_has_changed():
 # Send matrix to website server
 # -------------------------
 def send_matrix_to_server():
-    url = "https://yourwebsite.com/api/update_matrix"  # Replace with real URL
+    url = "localhost"  # Replace with real URL
     payload = {'matrix': matrix}
     headers = {'Content-Type': 'application/json'}
 
@@ -88,7 +88,7 @@ def send_matrix_to_server():
 #            send_matrix_to_server()
             # Update previous_matrix after sending
 #            for i in range(3):
-                previous_matrix[i] = matrix[i].copy()
+                # previous_matrix[i] = matrix[i].copy()
 #        time.sleep(2)  # Check every 2 seconds
 
 #except KeyboardInterrupt:
