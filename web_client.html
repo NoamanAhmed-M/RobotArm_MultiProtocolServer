@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Chat</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; }
+        #chat { width: 50%; margin: auto; height: 300px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; }
+        input, button { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h2>Chat Room</h2>
+    <div id="chat"></div>
+    <input type="text" id="messageInput" placeholder="Type a message">
+    <button onclick="sendMessage()">Send</button>
+
+    <script>
+        let name = prompt("Enter your name:");
+        let ws = new WebSocket("ws://10.65.102.51:8765");
+
+        ws.onopen = () => {
+            ws.send(name);
+        };
+
+        ws.onmessage = (event) => {
+            let chat = document.getElementById("chat");
+            chat.innerHTML += `<p>${event.data}</p>`;
+            chat.scrollTop = chat.scrollHeight;
+        };
+
+        function sendMessage() {
+            let input = document.getElementById("messageInput");
+            if (input.value.trim() !== "") {
+                ws.send(input.value);
+                input.value = "";
+            }
+        }
+    </script>
+</body>
+</html>
