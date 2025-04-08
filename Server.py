@@ -10,24 +10,25 @@ import json
 
 #First, if not installed, install this library (pip install requests)
 # -------------------
+#
 # GPIO & Matrix Setup
 # -------------------
 
 # Set GPIO mode
-GPIO.setmode(GPIO.BCM)
+#GPIO.setmode(GPIO.BCM)
 
 # Define a 3x3 grid of GPIO pins for the sensors
 # Adjust these GPIO numbers based on your wiring
-sensor_pins = [
-    [2, 3, 4],
-    [17, 27, 22],
-    [10, 9, 11]
-]
+#sensor_pins = [
+#    [2, 3, 4],
+#    [17, 27, 22],
+#    [10, 9, 11]
+#]
 
 # Setup sensor pins as input
-for row in sensor_pins:
-    for pin in row:
-        GPIO.setup(pin, GPIO.IN)
+#for row in sensor_pins:
+ #   for pin in row:
+  #      GPIO.setup(pin, GPIO.IN)
 
 # Create initial matrix (0 = empty, 1 = occupied)
 matrix = [
@@ -42,13 +43,13 @@ previous_matrix = [row.copy() for row in matrix]
 # -------------------------
 # Read sensor and update matrix
 # -------------------------
-def update_matrix_from_sensors():
-    global matrix
-    for i in range(3):
-        for j in range(3):
+#def update_matrix_from_sensors():
+#    global matrix
+ #   for i in range(3):
+ #       for j in range(3):
             sensor_value = GPIO.input(sensor_pins[i][j])
             # Assuming: sensor_value == 1 when object is present
-            matrix[i][j] = 1 if sensor_value else 0
+ #           matrix[i][j] = 1 if sensor_value else 0
 
 # -------------------------
 # Check if matrix changed
@@ -80,21 +81,21 @@ def send_matrix_to_server():
 # -------------------------
 # Main loop
 # -------------------------
-try:
-    while True:
-        update_matrix_from_sensors()
-        if matrix_has_changed():
-            send_matrix_to_server()
+#try:
+#    while True:
+#        update_matrix_from_sensors()
+#        if matrix_has_changed():
+#            send_matrix_to_server()
             # Update previous_matrix after sending
-            for i in range(3):
+#            for i in range(3):
                 previous_matrix[i] = matrix[i].copy()
-        time.sleep(2)  # Check every 2 seconds
+#        time.sleep(2)  # Check every 2 seconds
 
-except KeyboardInterrupt:
-    print("Exiting...")
+#except KeyboardInterrupt:
+#    print("Exiting...")
 
-finally:
-    GPIO.cleanup()
+#finally:
+#    GPIO.cleanup()
 
 
 class ChatServer:
