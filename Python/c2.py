@@ -6,7 +6,7 @@ import sys
 import os
 
 # Jetson IP and port (change to your Jetson's actual IP)
-DEST_IP = '192.168.146.136'  # Jetson IP - verify this is correct
+DEST_IP = '172.20.10.5'  # Jetson IP - verify this is correct
 DEST_PORT = 5005
 
 # Check network connectivity first
