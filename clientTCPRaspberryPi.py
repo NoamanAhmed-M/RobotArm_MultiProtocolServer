@@ -7,11 +7,11 @@ def receive_messages(client_socket):
         try:
             message = client_socket.recv(1024).decode('utf-8')
             if message:
-                print(f"\n{message}")
+                print("\n{}".format(message))  # Use `.format()` instead of f-string (optional for max compatibility)
             else:
                 break
-        except:
-            print("Disconnected from server.")
+        except Exception as e:
+            print("Disconnected from server. Error:", e)
             break
 
 def start_client(host, port):
@@ -24,15 +24,19 @@ def start_client(host, port):
     client_socket.send(name.encode('utf-8'))
 
     # Start a thread to listen for incoming messages
-    receive_thread = threading.Thread(target=receive_messages, args=(client_socket,), daemon=True)
+    receive_thread = threading.Thread(target=receive_messages, args=(client_socket,))
+    receive_thread.daemon = True
     receive_thread.start()
 
     # Continuously send messages
-    while True:
-        message = input()
-        if message.lower() == "exit":
-            break
-        client_socket.send(message.encode('utf-8'))
+    try:
+        while True:
+            message = input()
+            if message.lower() == "exit":
+                break
+            client_socket.send(message.encode('utf-8'))
+    except KeyboardInterrupt:
+        print("\nClient interrupted. Closing connection.")
 
     client_socket.close()
 
