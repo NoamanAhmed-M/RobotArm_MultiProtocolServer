@@ -13,11 +13,11 @@ async def send_video():
             if not ret:
                 continue
 
-          
             _, buffer = cv2.imencode('.jpg', frame)
             jpg_as_text = base64.b64encode(buffer).decode('utf-8')
 
             await websocket.send(jpg_as_text)
-            await asyncio.sleep(0.05) 
-
-asyncio.run(send_video())
+            await asyncio.sleep(0.05)
+          
+loop = asyncio.get_event_loop()
+loop.run_until_complete(send_video())
