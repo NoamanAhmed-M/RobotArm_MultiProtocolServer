@@ -1,23 +1,22 @@
-import cv2
-import base64
 import asyncio
 import websockets
 
-async def send_video():
-    uri = "ws://172.20.10.5:5005"
-    cap = cv2.VideoCapture(0)
+@asyncio.coroutine
+def connect_to_server():
+    uri = "ws://<RASPBERRY_IP>:8765"
 
-    async with websockets.connect(uri) as websocket:
+    try:
+        websocket = yield from websockets.connect(uri)
+        print("Connected to server!")
+
         while True:
-            ret, frame = cap.read()
-            if not ret:
-                continue
+            yield from websocket.send("Hello from Jetson!")
+            response = yield from websocket.recv()
+            print("Received from server:", response)
+            yield from asyncio.sleep(1)
 
-            _, buffer = cv2.imencode('.jpg', frame)
-            jpg_as_text = base64.b64encode(buffer).decode('utf-8')
+    except Exception as e:
+        print("Connection failed:", e)
 
-            await websocket.send(jpg_as_text)
-            await asyncio.sleep(0.05)
-          
 loop = asyncio.get_event_loop()
-loop.run_until_complete(send_video())
+loop.run_until_complete(connect_to_server())
