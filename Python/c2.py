@@ -84,4 +84,33 @@ try:
         
         num_chunks = (size // MAX_DGRAM) + 1
         
-        for i i
+        for i in range(num_chunks):
+            start = i * MAX_DGRAM
+            end = min(size, start + MAX_DGRAM)
+            chunk = data[start:end]
+            
+            # Header format: (index, total)
+            header = struct.pack("HH", i, num_chunks)
+            try:
+                sock.sendto(header + chunk, (DEST_IP, DEST_PORT))
+            except socket.error as e:
+                network_error_count += 1
+                if network_error_count < 5 or network_error_count % 100 == 0:
+                    print("Network error: {}".format(e))
+                    if network_error_count == 5:
+                        print("Suppressing further network errors...")
+                time.sleep(0.1)  # Short delay after an error
+        
+        time.sleep(0.05)  # 20 FPS limit (adjust if needed)
+
+except KeyboardInterrupt:
+    print("Stopping video stream")
+    running = False
+except Exception as e:
+    print("Error: {}".format(e))
+    running = False
+finally:
+    # Clean up
+    cap.release()
+    sock.close()
+    print("Resources released")
