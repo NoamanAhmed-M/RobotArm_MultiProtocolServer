@@ -10,7 +10,7 @@ import json
 
 class IntegratedServer:
     def __init__(self, tcp_host='0.0.0.0', tcp_port=5555, ws_host='0.0.0.0', ws_port=8765, udp_host='0.0.0.0', udp_port=5005):
-        # Chat server parameters
+        # Data transmission server parameters
         self.tcp_host = tcp_host
         self.tcp_port = tcp_port
         self.ws_host = ws_host
