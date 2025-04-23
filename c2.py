@@ -4,7 +4,7 @@ import struct
 import time
 
 # Server configuration
-SERVER_IP = ' 10.65.102.37'  # Change to the actual server IP
+SERVER_IP = '10.65.102.37'  # Change to the actual server IP
 SERVER_PORT = 5005
 MAX_DGRAM = 60000  # Slightly below the max UDP size (65507)
 
