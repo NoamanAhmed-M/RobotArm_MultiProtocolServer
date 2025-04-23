@@ -1,116 +1,88 @@
-import cv2
 import socket
-import time
+import cv2
+import numpy as np
 import struct
-import sys
-import os
+import asyncio
+import websockets
+import base64
 
-# Jetson IP and port (change to your Jetson's actual IP)
-DEST_IP = '172.20.10.5'  # Jetson IP - verify this is correct
-DEST_PORT = 5005
+UDP_IP = "0.0.0.0"
+UDP_PORT = 5005
+MAX_DGRAM = 65507
 
-# Check network connectivity first
-def check_network():
-    response = os.system("ping -c 1 -W 2 " + DEST_IP + " > /dev/null 2>&1")
-    if response != 0:
-        print("WARNING: Cannot reach destination IP: {}".format(DEST_IP))
-        print("Please check that the IP address is correct and the device is on the same network")
-        print("Continuing anyway - will keep trying to send frames...")
-        return False
-    return True
+connected_clients = set()
+frame_queue = asyncio.Queue()
+buffer_dict = {}
 
-# Setup UDP socket
-try:
+@asyncio.coroutine
+def websocket_handler(websocket, path):
+    print("[WS] Client connected.")
+    connected_clients.add(websocket)
+    try:
+        while True:
+            frame = yield from frame_queue.get()
+            yield from websocket.send(frame)
+    except websockets.exceptions.ConnectionClosed:
+        print("[WS] Client disconnected.")
+    finally:
+        connected_clients.remove(websocket)
+
+@asyncio.coroutine
+def start_websocket_server():
+    print(f"[WS] Starting WebSocket on ws://0.0.0.0:8765")
+    server = yield from websockets.serve(websocket_handler, "0.0.0.0", 8765)
+    return server
+
+@asyncio.coroutine
+def udp_receiver():
+    print(f"[UDP] Listening on {UDP_IP}:{UDP_PORT}")
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    # Set socket timeout to prevent blocking indefinitely
-    sock.settimeout(1.0)
-except socket.error as e:
-    print("Socket creation error: {}".format(e))
-    sys.exit(1)
+    sock.bind((UDP_IP, UDP_PORT))
+    sock.setblocking(False)
 
-# Open USB camera
-print("Opening camera...")
-cap = cv2.VideoCapture(0)
-if not cap.isOpened():
-    print("Error: Could not open camera")
-    sys.exit(1)
+    while True:
+        yield from asyncio.sleep(0)
+        try:
+            data, _ = sock.recvfrom(MAX_DGRAM)
+            if len(data) < 4:
+                continue
 
-# Set camera properties - using numeric indices for compatibility
-cap.set(3, 320)  # Width - using index 3 for compatibility
-cap.set(4, 240)  # Height - using index 4 for compatibility
+            index, total = struct.unpack("HH", data[:4])
+            chunk = data[4:]
 
-MAX_DGRAM = 65507  # Max UDP packet size
+            if index == 0:
+                buffer_dict.clear()
 
-# Check network before starting
-check_network()
+            buffer_dict[index] = chunk
 
-print("Starting video streaming to {}:{}".format(DEST_IP, DEST_PORT))
-print("Press Ctrl+C to stop")
+            if len(buffer_dict) == total:
+                full_data = b''.join(buffer_dict[i] for i in range(total))
+                img_np = np.frombuffer(full_data, dtype=np.uint8)
+                frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
 
-frame_count = 0
-network_error_count = 0
-last_network_check = time.time()
-
-running = True
-try:
-    while running:
-        ret, frame = cap.read()
-        if not ret:
-            print("Failed to capture frame - retrying")
-            time.sleep(0.1)
+                if frame is not None:
+                    _, jpeg = cv2.imencode('.jpg', frame)
+                    b64_data = base64.b64encode(jpeg.tobytes()).decode('utf-8')
+                    yield from frame_queue.put(b64_data)
+        except BlockingIOError:
             continue
-        
-        # Encode frame to JPEG with quality parameter (0-100)
-        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 80]  # Lower quality = smaller size
-        ret, buffer = cv2.imencode('.jpg', frame, encode_param)
-        if not ret:
-            print("Failed to encode frame")
-            continue
-            
-        data = buffer.tobytes()
-        size = len(data)
-        
-        # Print frame size occasionally
-        current_time = time.time()
-        frame_count += 1
-        if frame_count % 100 == 0:  # Print every 100 frames
-            print("Frame #{}: size = {} bytes".format(frame_count, size))
-        
-        # Periodically check network
-        if current_time - last_network_check > 30:  # Every 30 seconds
-            check_network()
-            last_network_check = current_time
-            network_error_count = 0  # Reset error counter after check
-        
-        num_chunks = (size // MAX_DGRAM) + 1
-        
-        for i in range(num_chunks):
-            start = i * MAX_DGRAM
-            end = min(size, start + MAX_DGRAM)
-            chunk = data[start:end]
-            
-            # Header format: (index, total)
-            header = struct.pack("HH", i, num_chunks)
-            try:
-                sock.sendto(header + chunk, (DEST_IP, DEST_PORT))
-            except socket.error as e:
-                network_error_count += 1
-                if network_error_count < 5 or network_error_count % 100 == 0:
-                    print("Network error: {}".format(e))
-                    if network_error_count == 5:
-                        print("Suppressing further network errors...")
-                time.sleep(0.1)  # Short delay after an error
-        
-        time.sleep(0.05)  # 20 FPS limit (adjust if needed)
+        except Exception as e:
+            print("UDP error:", e)
 
-except KeyboardInterrupt:
-    print("Stopping video stream")
-    running = False
-except Exception as e:
-    print("Error: {}".format(e))
-    running = False
-finally:
-    # Clean up
-    cap.release()
-    sock.close()
-    print("Resources released")
+def main():
+    loop = asyncio.get_event_loop()
+    udp_task = asyncio.ensure_future(udp_receiver(), loop=loop)
+    ws_server = loop.run_until_complete(start_websocket_server())
+
+    try:
+        print("[MAIN] Running event loop")
+        loop.run_forever()
+    except KeyboardInterrupt:
+        print("[MAIN] Shutting down")
+    finally:
+        ws_server.close()
+        loop.run_until_complete(ws_server.wait_closed())
+        loop.close()
+
+if __name__ == "__main__":
+    main()
