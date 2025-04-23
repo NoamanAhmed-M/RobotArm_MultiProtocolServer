@@ -3,170 +3,363 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebSocket Chat & Robot Control</title>
+    <title>Video Stream Client - Debug</title>
     <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            text-align: center; 
-            max-width: 800px; 
-            margin: 0 auto; 
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
             padding: 20px;
-        }
-        #chat { 
-            width: 100%; 
-            margin: 20px auto; 
-            height: 300px; 
-            overflow-y: auto; 
-            border: 1px solid #ddd; 
-            padding: 10px; 
-            border-radius: 5px;
-        }
-        #log { 
-            width: 100%; 
-            margin: 20px auto; 
-            height: 150px; 
-            overflow-y: auto; 
-            border: 1px solid #ddd; 
-            padding: 10px; 
             background-color: #f5f5f5;
-            border-radius: 5px;
         }
-        input { 
-            margin-top: 10px; 
-            padding: 8px; 
-            width: 60%; 
-            border-radius: 4px; 
-            border: 1px solid #ccc;
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
-        button { 
-            margin-top: 10px; 
-            padding: 8px 15px; 
-            border: none; 
-            border-radius: 4px; 
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .video-container {
+            width: 640px;
+            height: 480px;
+            margin: 20px auto;
+            border: 1px solid #ddd;
+            background-color: #000;
+            position: relative;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #e1f5fe;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .status.error {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+        .status.connected {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+        }
+        .controls {
+            text-align: center;
+            margin-top: 20px;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #4caf50;
+            color: white;
+            border: none;
+            border-radius: 4px;
             cursor: pointer;
-            font-weight: bold;
+            font-size: 16px;
+            margin: 0 5px;
         }
-        #startBtn {
-            background-color: #4CAF50;
-            color: white;
+        button:hover {
+            background-color: #45a049;
         }
-        #stopBtn {
-            background-color: #f44336;
-            color: white;
+        .stats {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+            text-align: left;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
         }
-        #sendBtn {
-            background-color: #2196F3;
-            color: white;
-        }
-        .control-panel {
-            margin: 20px 0;
-            padding: 15px;
-            border: 1px solid #eee;
-            border-radius: 5px;
-            background-color: #f9f9f9;
+        #messageLog {
+            margin-top: 20px;
+            max-height: 200px;
+            overflow-y: auto;
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            border-radius: 4px;
         }
         .log-entry {
-            font-family: monospace;
-            font-size: 0.9em;
-            margin: 3px 0;
-            color: #333;
+            margin-bottom: 5px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+        .log-time {
+            color: #999;
+            margin-right: 10px;
+        }
+        .log-type {
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        .log-type.info {
+            color: #2196F3;
+        }
+        .log-type.error {
+            color: #F44336;
+        }
+        .log-type.frame {
+            color: #4CAF50;
         }
     </style>
 </head>
 <body>
-    <h2>Chat Room & Robot Control</h2>
-    
-    <div id="chat"></div>
-    
-    <div>
-        <input type="text" id="messageInput" placeholder="Type a message">
-        <button id="sendBtn" onclick="sendMessage()">Send</button>
-    </div>
-    
-    <div class="control-panel">
-        <h3>Robot Control</h3>
-        <button id="startBtn" onclick="startRobot()">Start Robot</button>
-        <button id="stopBtn" onclick="stopRobot()">Stop Robot</button>
-    </div>
-    
-    <div id="log">
-        <div class="log-entry">System initialized. Waiting for commands...</div>
+    <div class="container">
+        <h1>Video Stream Client - Debug Mode</h1>
+        
+        <div class="video-container">
+            <canvas id="videoCanvas"></canvas>
+        </div>
+        
+        <div id="status" class="status">
+            Not connected
+        </div>
+        
+        <div class="controls">
+            <button id="connectBtn">Connect to Stream</button>
+            <button id="sendTestBtn">Send Test Message</button>
+        </div>
+        
+        <div class="stats">
+            <h3>Connection Stats</h3>
+            <div><strong>Status:</strong> <span id="connectionStatus">Disconnected</span></div>
+            <div><strong>Server:</strong> <span id="serverInfo">Not connected</span></div>
+            <div><strong>Frames received:</strong> <span id="framesReceived">0</span></div>
+            <div><strong>Last frame:</strong> <span id="lastFrameTime">Never</span></div>
+            <div><strong>FPS:</strong> <span id="fpsCounter">0</span></div>
+        </div>
+        
+        <h3>Message Log</h3>
+        <div id="messageLog"></div>
     </div>
 
     <script>
-        let name = prompt("Enter your name:");
-        let ws = new WebSocket("ws://10.65.102.51:8765");
-
-        ws.onopen = () => {
-            ws.send(JSON.stringify({type: "login", name: name}));
-            addLog("Connected to server as " + name);
-        };
-
-        ws.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                if (data.type === "chat") {
-                    let chat = document.getElementById("chat");
-                    chat.innerHTML += `<p><strong>${data.sender}:</strong> ${data.message}</p>`;
-                    chat.scrollTop = chat.scrollHeight;
-                } else if (data.type === "log") {
-                    addLog(data.message);
+        // Configuration (change these to match your server)
+        const SERVER_IP = "localhost"; // Change to your server IP
+        const VIDEO_WS_PORT = 8766; // This is your ws_port + 1
+        
+        // Elements
+        const videoCanvas = document.getElementById('videoCanvas');
+        const ctx = videoCanvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        const connectBtn = document.getElementById('connectBtn');
+        const sendTestBtn = document.getElementById('sendTestBtn');
+        const connectionStatusSpan = document.getElementById('connectionStatus');
+        const serverInfoSpan = document.getElementById('serverInfo');
+        const framesReceivedSpan = document.getElementById('framesReceived');
+        const lastFrameTimeSpan = document.getElementById('lastFrameTime');
+        const fpsCounterSpan = document.getElementById('fpsCounter');
+        const messageLogDiv = document.getElementById('messageLog');
+        
+        // Stats
+        let frameCount = 0;
+        let ws = null;
+        let isConnected = false;
+        let lastFrameTimestamp = 0;
+        let framesLastSecond = 0;
+        let lastFpsUpdate = Date.now();
+        
+        // Set canvas dimensions
+        videoCanvas.width = 640;
+        videoCanvas.height = 480;
+        
+        // Draw "No Signal" text
+        function drawNoSignal() {
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, videoCanvas.width, videoCanvas.height);
+            ctx.fillStyle = 'white';
+            ctx.font = '24px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('No Signal', videoCanvas.width / 2, videoCanvas.height / 2);
+        }
+        
+        // Initialize with "No Signal"
+        drawNoSignal();
+        
+        // Logging function
+        function logMessage(type, message) {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString() + '.' + String(now.getMilliseconds()).padStart(3, '0');
+            
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'log-time';
+            timeSpan.textContent = timeStr;
+            
+            const typeSpan = document.createElement('span');
+            typeSpan.className = `log-type ${type}`;
+            typeSpan.textContent = type.toUpperCase();
+            
+            const messageSpan = document.createElement('span');
+            messageSpan.className = 'log-message';
+            messageSpan.textContent = message;
+            
+            logEntry.appendChild(timeSpan);
+            logEntry.appendChild(typeSpan);
+            logEntry.appendChild(messageSpan);
+            
+            messageLogDiv.appendChild(logEntry);
+            messageLogDiv.scrollTop = messageLogDiv.scrollHeight;
+            
+            // Keep only the last 100 log entries
+            while (messageLogDiv.childElementCount > 100) {
+                messageLogDiv.removeChild(messageLogDiv.firstChild);
+            }
+        }
+        
+        // Update FPS counter
+        function updateFps() {
+            const now = Date.now();
+            const elapsed = (now - lastFpsUpdate) / 1000;
+            if (elapsed >= 1) {
+                const fps = framesLastSecond / elapsed;
+                fpsCounterSpan.textContent = fps.toFixed(1);
+                lastFpsUpdate = now;
+                framesLastSecond = 0;
+            }
+            requestAnimationFrame(updateFps);
+        }
+        
+        // Start FPS counter
+        updateFps();
+        
+        // Connect to WebSocket server
+        function connectToServer() {
+            if (isConnected) {
+                disconnectFromServer();
+                return;
+            }
+            
+            statusDiv.className = 'status';
+            statusDiv.textContent = 'Connecting...';
+            logMessage('info', `Connecting to ws://${SERVER_IP}:${VIDEO_WS_PORT}`);
+            
+            // Create WebSocket connection
+            ws = new WebSocket(`ws://${SERVER_IP}:${VIDEO_WS_PORT}`);
+            
+            // Connection opened
+            ws.addEventListener('open', (event) => {
+                isConnected = true;
+                statusDiv.className = 'status connected';
+                statusDiv.textContent = 'Connected to video stream';
+                connectionStatusSpan.textContent = 'Connected';
+                serverInfoSpan.textContent = `${SERVER_IP}:${VIDEO_WS_PORT}`;
+                connectBtn.textContent = 'Disconnect';
+                logMessage('info', 'Connected to video WebSocket server');
+            });
+            
+            // Listen for messages
+            ws.addEventListener('message', (event) => {
+                try {
+                    // Log raw message for debugging
+                    const rawMsg = event.data.length > 100 ? 
+                                  event.data.substring(0, 97) + '...' : 
+                                  event.data;
+                    logMessage('info', `Received message: ${rawMsg}`);
+                    
+                    const message = JSON.parse(event.data);
+                    
+                    if (message.type === 'video_frame') {
+                        // Process the video frame
+                        const imageData = message.data;
+                        logMessage('frame', `Frame #${message.frame_num || frameCount}`);
+                        
+                        // Create an image element to load the base64 data
+                        const img = new Image();
+                        img.onload = () => {
+                            // Draw the image to the canvas
+                            ctx.drawImage(img, 0, 0, videoCanvas.width, videoCanvas.height);
+                            
+                            // Update stats
+                            frameCount++;
+                            framesLastSecond++;
+                            framesReceivedSpan.textContent = frameCount;
+                            lastFrameTimestamp = message.timestamp || Date.now();
+                            lastFrameTimeSpan.textContent = new Date().toLocaleTimeString();
+                        };
+                        img.onerror = (error) => {
+                            logMessage('error', `Failed to load image: ${error}`);
+                        };
+                        img.src = 'data:image/jpeg;base64,' + imageData;
+                    } else if (message.status === 'connected') {
+                        logMessage('info', `Server confirmation: ${message.message}`);
+                    } else {
+                        logMessage('info', `Unknown message type: ${JSON.stringify(message)}`);
+                    }
+                } catch (error) {
+                    console.error('Error processing message:', error);
+                    logMessage('error', `Error processing message: ${error.message}`);
+                    statusDiv.textContent = 'Error processing video frame';
                 }
-            } catch (e) {
-                // If not JSON, treat as plain text
-                let chat = document.getElementById("chat");
-                chat.innerHTML += `<p>${event.data}</p>`;
-                chat.scrollTop = chat.scrollHeight;
+            });
+            
+            // Handle errors
+            ws.addEventListener('error', (event) => {
+                console.error('WebSocket error:', event);
+                logMessage('error', 'WebSocket error: Check console for details');
+                statusDiv.className = 'status error';
+                statusDiv.textContent = 'Connection error';
+            });
+            
+            // Handle connection close
+            ws.addEventListener('close', (event) => {
+                isConnected = false;
+                connectionStatusSpan.textContent = 'Disconnected';
+                serverInfoSpan.textContent = 'Not connected';
+                statusDiv.className = 'status';
+                statusDiv.textContent = 'Disconnected from server';
+                connectBtn.textContent = 'Connect to Stream';
+                logMessage('info', `Disconnected from server (code: ${event.code}, reason: ${event.reason || 'none provided'})`);
+                drawNoSignal();
+            });
+        }
+        
+        // Send a test message to the server
+        function sendTestMessage() {
+            if (!isConnected || !ws) {
+                logMessage('error', 'Not connected to server');
+                return;
             }
-        };
-
-        ws.onerror = (error) => {
-            addLog("WebSocket error: " + error.message);
-        };
-
-        ws.onclose = () => {
-            addLog("Disconnected from server");
-        };
-
-        function sendMessage() {
-            let input = document.getElementById("messageInput");
-            if (input.value.trim() !== "") {
-                ws.send(JSON.stringify({
-                    type: "chat",
-                    message: input.value
-                }));
-                input.value = "";
+            
+            try {
+                const testMessage = {
+                    type: 'ping',
+                    client_time: Date.now()
+                };
+                ws.send(JSON.stringify(testMessage));
+                logMessage('info', 'Sent test message to server');
+            } catch (error) {
+                logMessage('error', `Failed to send test message: ${error.message}`);
             }
         }
-
-        function startRobot() {
-            ws.send(JSON.stringify({
-                type: "command",
-                action: "start"
-            }));
-            addLog("Sent START command to robot");
-        }
-
-        function stopRobot() {
-            ws.send(JSON.stringify({
-                type: "command",
-                action: "stop"
-            }));
-            addLog("Sent STOP command to robot");
-        }
-
-        function addLog(message) {
-            const log = document.getElementById("log");
-            const timestamp = new Date().toLocaleTimeString();
-            log.innerHTML += `<div class="log-entry">[${timestamp}] ${message}</div>`;
-            log.scrollTop = log.scrollHeight;
-        }
-
-        // Allow sending message with Enter key
-        document.getElementById("messageInput").addEventListener("keypress", function(event) {
-            if (event.key === "Enter") {
-                sendMessage();
+        
+        // Disconnect from server
+        function disconnectFromServer() {
+            if (ws) {
+                logMessage('info', 'Disconnecting from server');
+                ws.close();
             }
+        }
+        
+        // Connect button event listener
+        connectBtn.addEventListener('click', connectToServer);
+        
+        // Send test message button
+        sendTestBtn.addEventListener('click', sendTestMessage);
+        
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            disconnectFromServer();
         });
     </script>
 </body>
