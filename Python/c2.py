@@ -1,88 +1,44 @@
-import socket
 import cv2
-import numpy as np
+import socket
+import time
 import struct
-import asyncio
-import websockets
-import base64
 
-UDP_IP = "0.0.0.0"
-UDP_PORT = 5005
-MAX_DGRAM = 65507
+# Jetson IP and port
+DEST_IP = '192.168.146.136'  # Replace with your Jetson's IP
+DEST_PORT = 5005
 
-connected_clients = set()
-frame_queue = asyncio.Queue()
-buffer_dict = {}
+# Setup UDP socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-@asyncio.coroutine
-def websocket_handler(websocket, path):
-    print("[WS] Client connected.")
-    connected_clients.add(websocket)
-    try:
-        while True:
-            frame = yield from frame_queue.get()
-            yield from websocket.send(frame)
-    except websockets.exceptions.ConnectionClosed:
-        print("[WS] Client disconnected.")
-    finally:
-        connected_clients.remove(websocket)
+# Open USB camera
+cap = cv2.VideoCapture(0)
+cap.set(3, 320)  # Width
+cap.set(4, 240)  # Height
 
-@asyncio.coroutine
-def start_websocket_server():
-    print(f"[WS] Starting WebSocket on ws://0.0.0.0:8765")
-    server = yield from websockets.serve(websocket_handler, "0.0.0.0", 8765)
-    return server
+MAX_DGRAM = 65507  # Max UDP packet size
 
-@asyncio.coroutine
-def udp_receiver():
-    print(f"[UDP] Listening on {UDP_IP}:{UDP_PORT}")
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind((UDP_IP, UDP_PORT))
-    sock.setblocking(False)
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("Failed to capture frame")
+        continue
 
-    while True:
-        yield from asyncio.sleep(0)
-        try:
-            data, _ = sock.recvfrom(MAX_DGRAM)
-            if len(data) < 4:
-                continue
+    # Encode frame to JPEG
+    ret, buffer = cv2.imencode('.jpg', frame)
+    if not ret:
+        continue
 
-            index, total = struct.unpack("HH", data[:4])
-            chunk = data[4:]
+    data = buffer.tobytes()
+    size = len(data)
+    num_chunks = int((size + MAX_DGRAM - 1) / MAX_DGRAM)  # Ensure rounding up
 
-            if index == 0:
-                buffer_dict.clear()
+    for i in range(num_chunks):
+        start = i * MAX_DGRAM
+        end = min(size, start + MAX_DGRAM)
+        chunk = data[start:end]
 
-            buffer_dict[index] = chunk
+        # Header format: (index, total)
+        header = struct.pack("HH", i, num_chunks)
+        sock.sendto(header + chunk, (DEST_IP, DEST_PORT))
 
-            if len(buffer_dict) == total:
-                full_data = b''.join(buffer_dict[i] for i in range(total))
-                img_np = np.frombuffer(full_data, dtype=np.uint8)
-                frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
-
-                if frame is not None:
-                    _, jpeg = cv2.imencode('.jpg', frame)
-                    b64_data = base64.b64encode(jpeg.tobytes()).decode('utf-8')
-                    yield from frame_queue.put(b64_data)
-        except BlockingIOError:
-            continue
-        except Exception as e:
-            print("UDP error:", e)
-
-def main():
-    loop = asyncio.get_event_loop()
-    udp_task = asyncio.ensure_future(udp_receiver(), loop=loop)
-    ws_server = loop.run_until_complete(start_websocket_server())
-
-    try:
-        print("[MAIN] Running event loop")
-        loop.run_forever()
-    except KeyboardInterrupt:
-        print("[MAIN] Shutting down")
-    finally:
-        ws_server.close()
-        loop.run_until_complete(ws_server.wait_closed())
-        loop.close()
-
-if __name__ == "__main__":
-    main()
+    time.sleep(0.05)  # Limit to 20 FPS
