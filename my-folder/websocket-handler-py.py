@@ -29,7 +29,7 @@ class WebSocketHandler:
     async def handle_websocket_client(self, websocket):
         """Handle regular WebSocket chat clients"""
         try:
-            # First message must be the client name
+            # First message must be the client name (e.g., "Web")
             name = await websocket.recv()
             if not name:
                 await websocket.close()
@@ -39,12 +39,40 @@ class WebSocketHandler:
                 self.server.ws_clients[websocket] = name
             print(f"[WS] {name} connected")
 
+            # Notify this client of successful connection
+            await websocket.send(json.dumps({
+                "type": "status",
+                "msg": f"Hello {name}, you're connected to the server.",
+                "timestamp": time.time()
+            }))
+
             async for message in websocket:
                 try:
                     message_obj = json.loads(message)
                     print(f"[WS] Message from {name}: {message_obj}")
-                    # Route message via central router
+
+                    # Echo back to the sender
+                    await websocket.send(json.dumps({
+                        "type": "status",
+                        "msg": f"Received command: {message_obj}",
+                        "timestamp": time.time()
+                    }))
+
+                    # Optional: broadcast to all clients
+                    with self.server.ws_lock:
+                        for client_ws, client_name in self.server.ws_clients.items():
+                            if client_ws != websocket:
+                                try:
+                                    await client_ws.send(json.dumps({
+                                        "type": "status",
+                                        "msg": f"{name} sent: {message_obj}"
+                                    }))
+                                except Exception as e:
+                                    print(f"[WS Error] Failed to broadcast: {e}")
+
+                    # Route the message to the rest of your system
                     self.server.router.route(message_obj, name, sender_type="ws")
+
                 except Exception as e:
                     print(f"[WS Error] Failed to process message from {name}: {e}")
                     traceback.print_exc()
