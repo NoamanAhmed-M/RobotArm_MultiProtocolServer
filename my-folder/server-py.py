@@ -4,6 +4,7 @@ import time
 from tcp_handler import TCPHandler
 from websocket_handler import WebSocketHandler
 from udp_handler import UDPHandler
+from status_router import MessageRouter
 
 class MultiProtocolServer:
     def __init__(self, tcp_host='0.0.0.0', tcp_port=5555, 
