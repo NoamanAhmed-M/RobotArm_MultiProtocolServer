@@ -11,7 +11,6 @@ class WebSocketHandler:
         self.server = server
 
     def create_chat_server(self):
-        """Create WebSocket server for chat messages"""
         return websockets.serve(
             self.handle_websocket_client,
             self.server.ws_host,
@@ -19,7 +18,6 @@ class WebSocketHandler:
         )
 
     def create_video_server(self, video_ws_port):
-        """Create WebSocket server for video streaming"""
         return websockets.serve(
             self.handle_video_websocket_client,
             self.server.ws_host,
@@ -27,9 +25,9 @@ class WebSocketHandler:
         )
 
     async def handle_websocket_client(self, websocket):
-        """Handle regular WebSocket chat clients"""
+        """Handles chat/control clients (e.g., Web, RobotArm)"""
         try:
-            # First message must be the client name (e.g., "Web")
+            # First message: client name
             name = await websocket.recv()
             if not name:
                 await websocket.close()
@@ -39,95 +37,91 @@ class WebSocketHandler:
                 self.server.ws_clients[websocket] = name
             print(f"[WS] {name} connected")
 
-            # Notify this client of successful connection
+            # Confirm connection
             await websocket.send(json.dumps({
                 "type": "status",
-                "msg": f"Hello {name}, you're connected to the server.",
+                "msg": f"{name} connected successfully",
                 "timestamp": time.time()
             }))
 
+            # Main receive loop
             async for message in websocket:
+                print(f"[WS DEBUG] Raw message from {name}: {message}")
                 try:
                     message_obj = json.loads(message)
-                    print(f"[WS] Message from {name}: {message_obj}")
 
-                    # Echo back to the sender
+                    # TEMP: Print ON/OFF commands
+                    if message_obj.get("type") == "command":
+                        if message_obj.get("value") is True:
+                            print(f"[WS] ✅ ON command received from {name}")
+                        elif message_obj.get("value") is False:
+                            print(f"[WS] ❌ OFF command received from {name}")
+
+                    # Optional: echo back
                     await websocket.send(json.dumps({
                         "type": "status",
-                        "msg": f"Received command: {message_obj}",
+                        "msg": f"Command received: {message_obj}",
                         "timestamp": time.time()
                     }))
 
-                    # Optional: broadcast to all clients
+                    # Optional: broadcast to others
                     with self.server.ws_lock:
                         for client_ws, client_name in self.server.ws_clients.items():
                             if client_ws != websocket:
-                                try:
-                                    await client_ws.send(json.dumps({
-                                        "type": "status",
-                                        "msg": f"{name} sent: {message_obj}"
-                                    }))
-                                except Exception as e:
-                                    print(f"[WS Error] Failed to broadcast: {e}")
+                                await client_ws.send(json.dumps({
+                                    "type": "status",
+                                    "msg": f"{name} sent command: {message_obj}"
+                                }))
 
-                    # Route the message to the rest of your system
+                    # Route command to robot or internal logic
                     self.server.router.route(message_obj, name, sender_type="ws")
 
                 except Exception as e:
-                    print(f"[WS Error] Failed to process message from {name}: {e}")
+                    print(f"[WS ERROR] Failed to handle message from {name}: {e}")
                     traceback.print_exc()
 
         except Exception as e:
-            print(f"[WS Error] Client connection error: {e}")
+            print(f"[WS ERROR] Connection error: {e}")
             traceback.print_exc()
+
         finally:
             with self.server.ws_lock:
                 self.server.ws_clients.pop(websocket, None)
             print(f"[WS] {name if 'name' in locals() else 'Unknown'} disconnected")
 
     async def handle_video_websocket_client(self, websocket):
-        """Handle WebSocket video streaming clients"""
+        """Sends test video frame to video canvas clients"""
         try:
             client_ip = websocket.remote_address[0]
             print(f"[WS Video] Client connected from {client_ip}")
             self.server.video_ws_clients.add(websocket)
 
-            # Send initial connection confirmation
-            try:
-                test_message = json.dumps({
-                    "status": "connected",
-                    "message": "Video stream connected",
-                    "timestamp": time.time()
-                })
-                await websocket.send(test_message)
-                print(f"[WS Video] Sent connection confirmation to {client_ip}")
-            except Exception as e:
-                print(f"[WS Video] Failed to send test message: {e}")
+            # Send confirmation
+            await websocket.send(json.dumps({
+                "status": "connected",
+                "message": "Video stream connected",
+                "timestamp": time.time()
+            }))
 
-            # Send a test image frame
-            try:
-                test_img = np.ones((480, 640, 3), dtype=np.uint8) * 128
-                cv2.putText(test_img, "Test Frame", (220, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                _, jpeg = cv2.imencode('.jpg', test_img)
-                b64_data = base64.b64encode(jpeg.tobytes()).decode('utf-8')
+            # Send test frame
+            test_img = np.ones((480, 640, 3), dtype=np.uint8) * 128
+            cv2.putText(test_img, "Test Frame", (220, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            _, jpeg = cv2.imencode('.jpg', test_img)
+            b64_data = base64.b64encode(jpeg.tobytes()).decode('utf-8')
 
-                test_frame = json.dumps({
-                    "type": "video_frame",
-                    "data": b64_data,
-                    "timestamp": time.time(),
-                    "test": True
-                })
-                await websocket.send(test_frame)
-                print(f"[WS Video] Sent test frame to {client_ip}")
-            except Exception as e:
-                print(f"[WS Video] Failed to send test frame: {e}")
-                traceback.print_exc()
+            await websocket.send(json.dumps({
+                "type": "video_frame",
+                "data": b64_data,
+                "timestamp": time.time(),
+                "test": True
+            }))
 
             await websocket.wait_closed()
+
         except Exception as e:
             print(f"[WS Video] Error in client handler: {e}")
             traceback.print_exc()
+
         finally:
-            if websocket in self.server.video_ws_clients:
-                self.server.video_ws_clients.discard(websocket)
-                print(f"[WS Video] Client from {client_ip} disconnected")
+            self.server.video_ws_clients.discard(websocket)
+            print(f"[WS Video] Client from {client_ip} disconnected")
