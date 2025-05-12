@@ -1,0 +1,88 @@
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <ArduinoJson.h>
+int a=0;
+// WiFi credentials
+const char* ssid = "N";
+const char* password = "12345678";
+
+// TCP server settings
+const char* server_ip = "192.168.43.114";  //  Replace with your actual server IP
+const uint16_t server_port = 5555;
+
+// Client identifier for server routing
+const char* client_id = "ESP_Matrix";
+
+// Matrix data (example 3x3 identity matrix)
+int matrix[3][3] = {
+  {a, 1, 1},
+  {1, 1, 1},
+  {1, 1, 1}
+};
+
+WiFiClient client;
+
+void connectToServer() {
+  Serial.print("[TCP] Connecting to server... ");
+  if (client.connect(server_ip, server_port)) {
+    Serial.println("Connected");
+
+    //  Send client name/ID as first message (plain text)
+    client.println(client_id);
+    Serial.println("[TCP] Sent client name: " + String(client_id));
+
+    delay(500);  // Optional wait before sending matrix
+    sendMatrix();
+  } else {
+    Serial.println("Failed to connect");
+  }
+}
+
+void sendMatrix() {
+  if (!client.connected()) {
+    Serial.println("[TCP]  Not connected to server");
+    return;
+  }
+
+  // Create JSON matrix object
+  StaticJsonDocument<256> doc;
+  doc["type"] = "matrix";
+  JsonArray rows = doc.createNestedArray("matrix");
+  for (int i = 0; i < 3; i++) {
+    JsonArray row = rows.createNestedArray();
+    for (int j = 0; j < 3; j++) {
+      row.add(matrix[i][j]);
+    }
+  }
+
+  // Serialize and send
+  String jsonStr;
+  serializeJson(doc, jsonStr);
+  client.print(jsonStr);  // Sends with newline delimiter
+  Serial.println("[TCP] Sent matrix JSON:");
+  Serial.println(jsonStr);
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  // Connect to Wi-Fi
+  Serial.print("[WiFi] Connecting to ");
+  Serial.print(ssid);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\n[WiFi]  Connected");
+
+  // Connect and send
+  connectToServer();
+}
+
+void loop() {
+  // Optionally resend every 10s
+  delay(10000);
+  sendMatrix();
+}
