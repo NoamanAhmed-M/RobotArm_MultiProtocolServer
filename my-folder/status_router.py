@@ -28,16 +28,13 @@ class MessageRouter:
 
         for target in targets:
             if target == "Web":
-                print(f"[Router] → Forwarding to WebSocket clients")
                 self.send_to_web(message_obj)
             else:
-                print(f"[Router] → Forwarding to TCP client: {target}")
                 self.send_to_tcp(target, message_obj)
 
     def send_to_web(self, message_obj):
         try:
-            # ✅ Use the server's loop safely
-            loop = self.server.loop
+            loop = self.server.loop  # Must be set in server.py
             asyncio.run_coroutine_threadsafe(
                 self._send_to_web(message_obj),
                 loop
@@ -54,6 +51,10 @@ class MessageRouter:
                 except Exception as e:
                     print(f"[Router] ❌ WebSocket send failed for {name}: {e}")
                     self.server.ws_clients.pop(ws, None)
+                    try:
+                        await ws.close()
+                    except:
+                        pass
 
     def send_to_tcp(self, target_name, message_obj):
         with self.server.tcp_lock:
@@ -65,3 +66,7 @@ class MessageRouter:
                     except Exception as e:
                         print(f"[Router] ❌ TCP send failed for {name}: {e}")
                         self.server.tcp_clients.pop(sock, None)
+                        try:
+                            sock.close()
+                        except:
+                            pass
