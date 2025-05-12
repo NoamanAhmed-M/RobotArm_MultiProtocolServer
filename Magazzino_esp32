@@ -1,7 +1,6 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
-int a=0;
 // WiFi credentials
 const char* ssid = "N";
 const char* password = "12345678";
@@ -15,7 +14,7 @@ const char* client_id = "ESP_Matrix";
 
 // Matrix data (example 3x3 identity matrix)
 int matrix[3][3] = {
-  {a, 1, 1},
+  {1, 1, 1},
   {1, 1, 1},
   {1, 1, 1}
 };
