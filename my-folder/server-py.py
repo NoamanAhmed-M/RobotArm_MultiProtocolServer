@@ -18,58 +18,54 @@ class MultiProtocolServer:
         self.ws_port = ws_port
         self.udp_host = udp_host
         self.udp_port = udp_port
-        
+
         # Shared state
-        self.tcp_clients = {}            # {socket: name}
-        self.ws_clients = {}             # {websocket: name}
+        self.tcp_clients = {}            # {socket: client_name}
+        self.ws_clients = {}             # {websocket: client_name}
         self.video_ws_clients = set()    # {websocket}
         self.frame_queue = asyncio.Queue(maxsize=10)
         self.buffer_dict = {}
 
-        # Stats tracking
+        # Stats
         self.last_frame_time = time.time()
         self.frame_count = 0
         self.frames_sent = 0
         self.frames_processed = 0
 
-        # Optional legacy routing rules
-        self.routing_rules = {
-            "client1": ["client2"],
-            "client2": ["client1"],
-            "admin": ["*"]
-        }
-
-        # Thread safety
+        # Locks for thread safety
         self.tcp_lock = threading.Lock()
         self.ws_lock = threading.Lock()
 
-        # ✅ Initialize the message router
+        # ✅ Message router
         self.router = MessageRouter(self)
 
-        # Protocol handlers
+        # Handlers
         self.tcp_handler = TCPHandler(self)
         self.ws_handler = WebSocketHandler(self)
         self.udp_handler = UDPHandler(self)
 
+        # Async loop will be stored later
+        self.loop = None
+
     def start(self):
-        """Start all server components"""
-        # Start TCP server in a separate thread
+        """Start TCP (threaded) and async servers"""
         tcp_thread = threading.Thread(target=self.tcp_handler.start_tcp_server, daemon=True)
         tcp_thread.start()
 
-        # Run async components in the main thread
+        # Start async servers (WebSocket, UDP, stats)
         asyncio.run(self.start_async_servers())
 
     async def start_async_servers(self):
-        """Start all async server components (WebSocket and UDP)"""
+        """Start WebSocket and UDP servers"""
         print("[Async] Starting WebSocket and UDP servers...")
+        self.loop = asyncio.get_running_loop()
 
-        # Start UDP receiver task
+        # Tasks
         udp_task = asyncio.create_task(self.udp_handler.udp_receiver())
         broadcast_task = asyncio.create_task(self.udp_handler.broadcast_frames())
         stats_task = asyncio.create_task(self.display_stats())
 
-        # Configure WebSocket servers
+        # WebSocket ports
         video_ws_port = self.ws_port + 1
         print(f"[WS] Chat Server starting on {self.ws_host}:{self.ws_port}")
         print(f"[WS] Video Server starting on {self.ws_host}:{video_ws_port}")
@@ -83,21 +79,27 @@ class MultiProtocolServer:
                 await asyncio.gather(udp_task, broadcast_task, stats_task)
 
     async def display_stats(self):
-        """Display server statistics periodically"""
+        """Log statistics every 5 seconds"""
         while True:
             await asyncio.sleep(5)
             now = time.time()
             elapsed = now - self.last_frame_time
             fps = self.frame_count / elapsed if elapsed > 0 else 0
-            
             queue_size = self.frame_queue.qsize()
-            print(f"[Stats] FPS: {fps:.2f}, Queue: {queue_size}, Clients: {len(self.video_ws_clients)}, " +
-                  f"Processed: {self.frames_processed}, Sent: {self.frames_sent}")
-            
+
+            print(
+                f"[Stats] FPS: {fps:.2f}, Queue: {queue_size}, "
+                f"WS Clients: {len(self.video_ws_clients)}, "
+                f"Processed: {self.frames_processed}, Sent: {self.frames_sent}"
+            )
+
             self.last_frame_time = now
             self.frame_count = 0
 
     def get_target_recipients(self, sender_name):
-        """Determine which clients should receive a message based on legacy routing rules"""
+        """
+        (Optional) Legacy routing rule support.
+        Not used by MessageRouter directly unless extended.
+        """
         targets = self.routing_rules.get(sender_name, [])
         return targets if "*" not in targets else ["*"]
