@@ -6,8 +6,8 @@ class MessageRouter:
         self.routing_table = {
             "ESP_Matrix": ["Web"],
             "WebClient": ["RobotArm"],
-            "ESP_Boolean": ["web", "RobotArm"],
-            "RobotArm": ["web"]
+            "ESP_Boolean": ["Web", "RobotArm"],
+            "RobotArm": ["Web"]
         }
 
     def route(self, message_obj, sender_name, sender_type="tcp"):
