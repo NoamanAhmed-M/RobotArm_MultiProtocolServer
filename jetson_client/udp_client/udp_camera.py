@@ -18,7 +18,7 @@ def open_camera():
 def start_udp_camera():
     SERVER_IP = '10.65.102.37'
     SERVER_PORT = 5005
-    MAX_DGRAM = 1400  # Use smaller chunks to avoid packet loss
+    MAX_DGRAM = 65000
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     print(f"[Camera] Connecting to {SERVER_IP}:{SERVER_PORT}")
