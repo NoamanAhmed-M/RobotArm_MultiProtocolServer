@@ -3,8 +3,8 @@
 #include <ArduinoJson.h>
 
 // WiFi credentials
-const char* ssid = "N";
-const char* password = "12345678";
+const char* ssid = "192.168.1.150";
+const char* password = "123456789";
 
 // TCP server settings
 const char* server_ip = "192.168.43.114";  // Replace with your server IP
