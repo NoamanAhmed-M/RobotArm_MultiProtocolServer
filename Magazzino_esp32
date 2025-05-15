@@ -7,7 +7,7 @@ const char* ssid = "TP-Link_CE88";
 const char* password = "123456789";
 
 // TCP server settings
-const char* server_ip = "192.168.43.114";  // Replace with your server IP
+const char* server_ip = "192.168.1.150";  // Replace with your server IP
 const uint16_t server_port = 5555;
 const char* client_id = "ESP_Matrix";
 
