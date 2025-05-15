@@ -3,64 +3,235 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Video Stream Client - Debug</title>
+  <title>Jetson Nano + ESP32 Client</title>
   <style>
-    /* ... [unchanged styling from your original file] ... */
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: linear-gradient(135deg, #e3f2fd, #fff);
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: auto;
+      background: #fff;
+      padding: 16px;
+      border-radius: 12px;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      text-align: center;
+    }
+
+    .video-container {
+      width: 100%;
+      max-width: 100%;
+      aspect-ratio: 4 / 3;
+      background: black;
+      border: 2px solid #ccc;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 20px auto;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .controls button {
+      flex: 1 0 120px;
+      padding: 12px;
+      font-size: 1rem;
+      cursor: pointer;
+      background-color: #1976d2;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      transition: background 0.3s, transform 0.2s;
+    }
+
+    .controls button:hover {
+      background-color: #1565c0;
+      transform: scale(1.05);
+    }
+
+    .status {
+      margin-top: 16px;
+      padding: 10px;
+      border-radius: 4px;
+      text-align: center;
+      font-weight: bold;
+      background: #e1f5fe;
+    }
+
+    .status.connected {
+      background: #e8f5e9;
+      color: #2e7d32;
+    }
+
+    .status.error {
+      background: #ffebee;
+      color: #c62828;
+    }
+
+    .stats, .matrix-section {
+      font-size: 0.95rem;
+      margin-top: 16px;
+      word-break: break-word;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+
+    td, th {
+      border: 1px solid #666;
+      padding: 8px;
+      text-align: center;
+      background-color: #fafafa;
+    }
+
+    .toggle-header {
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      font-size: 1.1rem;
+      margin-top: 20px;
+    }
+
+    .toggle-header span {
+      font-size: 1.2rem;
+      margin-right: 8px;
+    }
+
+    #messageLog {
+      background: #f8f8f8;
+      padding: 10px;
+      margin-top: 10px;
+      height: 200px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 13px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      display: none;
+    }
+
+    .log-entry {
+      margin-bottom: 5px;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 5px;
+    }
+
+    .log-time { color: #999; margin-right: 10px; }
+    .log-type { font-weight: bold; margin-right: 10px; }
+    .log-type.info { color: #2196F3; }
+    .log-type.error { color: #F44336; }
+    .log-type.frame { color: #4CAF50; }
+
+    @media (max-width: 600px) {
+      h1 { font-size: 1.3rem; }
+      .controls button { font-size: 0.9rem; padding: 10px; }
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Video Stream Client - Debug Mode</h1>
+    <h1>Jetson Nano Video + ESP32 Matrix Client</h1>
 
     <div class="video-container">
-      <canvas id="videoCanvas"></canvas>
+      <canvas id="videoCanvas" width="640" height="480"></canvas>
     </div>
 
     <div id="status" class="status">Not connected</div>
 
     <div class="controls">
       <button id="connectBtn">Connect to Stream</button>
-      <button id="sendTestBtn">Send Test Message</button>
+      <button onclick="sendCommand(true)">Turn ON</button>
+      <button onclick="sendCommand(false)">Turn OFF</button>
     </div>
 
     <div class="stats">
-      <h3>Connection Stats</h3>
       <div><strong>Status:</strong> <span id="connectionStatus">Disconnected</span></div>
       <div><strong>Server:</strong> <span id="serverInfo">Not connected</span></div>
-      <div><strong>Frames received:</strong> <span id="framesReceived">0</span></div>
       <div><strong>Last frame:</strong> <span id="lastFrameTime">Never</span></div>
-      <div><strong>FPS:</strong> <span id="fpsCounter">0</span></div>
     </div>
 
-    <h3>Message Log</h3>
+    <div class="matrix-section">
+      <h3>Latest Matrix from ESP32</h3>
+      <div id="matrixContainer">No matrix received yet.</div>
+    </div>
+
+    <div class="toggle-header" onclick="toggleLog()">
+      <span id="logArrow">⯈</span> <strong>Message Log</strong>
+    </div>
     <div id="messageLog"></div>
   </div>
 
   <script>
-    const SERVER_IP = "localhost";  // Replace with server IP if needed
+    const SERVER_IP = "192.168.43.114"; // Your server IP
     const VIDEO_WS_PORT = 8766;
+    const CHAT_WS_PORT = 8765;
 
     const videoCanvas = document.getElementById("videoCanvas");
     const ctx = videoCanvas.getContext("2d");
-    const statusDiv = document.getElementById("status");
     const connectBtn = document.getElementById("connectBtn");
-    const sendTestBtn = document.getElementById("sendTestBtn");
+    const lastFrameTimeSpan = document.getElementById("lastFrameTime");
     const connectionStatusSpan = document.getElementById("connectionStatus");
     const serverInfoSpan = document.getElementById("serverInfo");
-    const framesReceivedSpan = document.getElementById("framesReceived");
-    const lastFrameTimeSpan = document.getElementById("lastFrameTime");
-    const fpsCounterSpan = document.getElementById("fpsCounter");
+    const statusDiv = document.getElementById("status");
     const messageLogDiv = document.getElementById("messageLog");
+    const matrixContainer = document.getElementById("matrixContainer");
 
-    let frameCount = 0;
-    let ws = null;
+    let videoWS = null;
+    let chatWS = null;
     let isConnected = false;
-    let lastFrameTimestamp = 0;
-    let framesLastSecond = 0;
-    let lastFpsUpdate = Date.now();
 
-    videoCanvas.width = 640;
-    videoCanvas.height = 480;
+    function toggleLog() {
+      const arrow = document.getElementById("logArrow");
+      if (messageLogDiv.style.display === "none") {
+        messageLogDiv.style.display = "block";
+        arrow.textContent = "⯆";
+      } else {
+        messageLogDiv.style.display = "none";
+        arrow.textContent = "⯈";
+      }
+    }
+
+    function logMessage(type, message) {
+      if (type === "frame") return;
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString() + '.' + String(now.getMilliseconds()).padStart(3, "0");
+      const logEntry = document.createElement("div");
+      logEntry.className = "log-entry";
+      logEntry.innerHTML = `<span class="log-time">${timeStr}</span>
+                            <span class="log-type ${type}">${type.toUpperCase()}</span>
+                            <span>${message}</span>`;
+      messageLogDiv.appendChild(logEntry);
+      messageLogDiv.scrollTop = messageLogDiv.scrollHeight;
+      if (messageLogDiv.childElementCount > 100) {
+        messageLogDiv.removeChild(messageLogDiv.firstChild);
+      }
+    }
 
     function drawNoSignal() {
       ctx.fillStyle = "black";
@@ -71,168 +242,113 @@
       ctx.fillText("No Signal", videoCanvas.width / 2, videoCanvas.height / 2);
     }
 
-    drawNoSignal();
-
-    function logMessage(type, message) {
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString() + "." + String(now.getMilliseconds()).padStart(3, "0");
-
-      const logEntry = document.createElement("div");
-      logEntry.className = "log-entry";
-
-      const timeSpan = document.createElement("span");
-      timeSpan.className = "log-time";
-      timeSpan.textContent = timeStr;
-
-      const typeSpan = document.createElement("span");
-      typeSpan.className = `log-type ${type}`;
-      typeSpan.textContent = type.toUpperCase();
-
-      const messageSpan = document.createElement("span");
-      messageSpan.className = "log-message";
-      messageSpan.textContent = message;
-
-      logEntry.appendChild(timeSpan);
-      logEntry.appendChild(typeSpan);
-      logEntry.appendChild(messageSpan);
-
-      messageLogDiv.appendChild(logEntry);
-      messageLogDiv.scrollTop = messageLogDiv.scrollHeight;
-
-      while (messageLogDiv.childElementCount > 100) {
-        messageLogDiv.removeChild(messageLogDiv.firstChild);
-      }
-    }
-
-    function updateFps() {
-      const now = Date.now();
-      const elapsed = (now - lastFpsUpdate) / 1000;
-      if (elapsed >= 1) {
-        const fps = framesLastSecond / elapsed;
-        fpsCounterSpan.textContent = fps.toFixed(1);
-        lastFpsUpdate = now;
-        framesLastSecond = 0;
-      }
-      requestAnimationFrame(updateFps);
-    }
-
-    updateFps();
-
-    function connectToServer() {
+    function connectToVideo() {
       if (isConnected) {
-        disconnectFromServer();
+        videoWS.close();
         return;
       }
 
-      statusDiv.className = "status";
-      statusDiv.textContent = "Connecting...";
-      logMessage("info", `Connecting to ws://${SERVER_IP}:${VIDEO_WS_PORT}`);
+      logMessage("info", `Connecting to video ws://${SERVER_IP}:${VIDEO_WS_PORT}`);
+      videoWS = new WebSocket(`ws://${SERVER_IP}:${VIDEO_WS_PORT}`);
 
-      ws = new WebSocket(`ws://${SERVER_IP}:${VIDEO_WS_PORT}`);
-
-      ws.addEventListener("open", (event) => {
+      videoWS.onopen = () => {
         isConnected = true;
-        statusDiv.className = "status connected";
-        statusDiv.textContent = "Connected to video stream";
         connectionStatusSpan.textContent = "Connected";
         serverInfoSpan.textContent = `${SERVER_IP}:${VIDEO_WS_PORT}`;
+        statusDiv.textContent = "Connected to video stream";
+        statusDiv.className = "status connected";
         connectBtn.textContent = "Disconnect";
-        logMessage("info", "Connected to video WebSocket server");
+        videoWS.send("Web");
+      };
 
-        // ✅ Send client name as first message
-        ws.send("Web");
-      });
-
-      ws.addEventListener("message", (event) => {
+      videoWS.onmessage = (event) => {
         try {
-          const rawMsg = event.data.length > 100 ? event.data.substring(0, 97) + "..." : event.data;
-          logMessage("info", `Received message: ${rawMsg}`);
-
-          const message = JSON.parse(event.data);
-
-          if (message.type === "video_frame") {
-            const imageData = message.data;
-            logMessage("frame", `Frame #${message.frame_num || frameCount}`);
-
+          const msg = JSON.parse(event.data);
+          if (msg.type === "video_frame") {
             const img = new Image();
             img.onload = () => {
               ctx.drawImage(img, 0, 0, videoCanvas.width, videoCanvas.height);
-              frameCount++;
-              framesLastSecond++;
-              framesReceivedSpan.textContent = frameCount;
-              lastFrameTimestamp = message.timestamp || Date.now();
               lastFrameTimeSpan.textContent = new Date().toLocaleTimeString();
             };
-            img.onerror = (error) => {
-              logMessage("error", `Failed to load image: ${error}`);
-            };
-            img.src = "data:image/jpeg;base64," + imageData;
-
-          } else if (message.status === "connected") {
-            logMessage("info", `Server confirmation: ${message.message}`);
-
-          } else if (message.sender) {
-            logMessage("info", `From ${message.sender}: ${JSON.stringify(message)}`);
-
-          } else {
-            logMessage("info", `Message: ${JSON.stringify(message)}`);
+            img.src = "data:image/jpeg;base64," + msg.data;
           }
-        } catch (error) {
-          console.error("Error processing message:", error);
-          logMessage("error", `Error processing message: ${error.message}`);
-          statusDiv.textContent = "Error processing video frame";
+        } catch (e) {
+          logMessage("error", `Failed to parse video frame: ${e}`);
         }
-      });
+      };
 
-      ws.addEventListener("error", (event) => {
-        console.error("WebSocket error:", event);
-        logMessage("error", "WebSocket error: Check console for details");
+      videoWS.onerror = () => {
         statusDiv.className = "status error";
-        statusDiv.textContent = "Connection error";
-      });
+        statusDiv.textContent = "Video WebSocket Error";
+        logMessage("error", "Video WebSocket error");
+      };
 
-      ws.addEventListener("close", (event) => {
+      videoWS.onclose = () => {
         isConnected = false;
+        connectBtn.textContent = "Connect to Stream";
+        statusDiv.textContent = "Disconnected";
         connectionStatusSpan.textContent = "Disconnected";
         serverInfoSpan.textContent = "Not connected";
-        statusDiv.className = "status";
-        statusDiv.textContent = "Disconnected from server";
-        connectBtn.textContent = "Connect to Stream";
-        logMessage("info", `Disconnected from server (code: ${event.code}, reason: ${event.reason || "none"})`);
         drawNoSignal();
-      });
+        logMessage("info", "Video WebSocket disconnected");
+      };
     }
 
-    function sendTestMessage() {
-      if (!isConnected || !ws) {
-        logMessage("error", "Not connected to server");
+    function connectToChat() {
+      chatWS = new WebSocket(`ws://${SERVER_IP}:${CHAT_WS_PORT}`);
+      chatWS.onopen = () => {
+        chatWS.send("Web");
+        logMessage("info", "Chat WebSocket connected and identified as Web");
+      };
+      chatWS.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "matrix" && msg.matrix) {
+            displayMatrix(msg.matrix);
+            logMessage("info", "Matrix received and displayed");
+          } else {
+            logMessage("info", "Message: " + JSON.stringify(msg));
+          }
+        } catch (e) {
+          logMessage("error", "Failed to parse chat message: " + e.message);
+        }
+      };
+      chatWS.onerror = () => logMessage("error", "Chat WebSocket error");
+      chatWS.onclose = () => logMessage("info", "Chat WebSocket closed");
+    }
+
+    function sendCommand(state) {
+      if (!chatWS || chatWS.readyState !== WebSocket.OPEN) {
+        logMessage("error", "Chat WebSocket not connected");
         return;
       }
-
-      try {
-        const testMessage = {
-          type: "command",
-          value: true
-        };
-        ws.send(JSON.stringify(testMessage));
-        logMessage("info", "Sent test message to server");
-      } catch (error) {
-        logMessage("error", `Failed to send test message: ${error.message}`);
-      }
+      chatWS.send(JSON.stringify({ type: "command", value: state }));
+      logMessage("info", `Sent ${state ? "ON" : "OFF"} command`);
     }
 
-    function disconnectFromServer() {
-      if (ws) {
-        logMessage("info", "Disconnecting from server");
-        ws.close();
-      }
+    function displayMatrix(matrix) {
+      const table = document.createElement("table");
+      matrix.forEach(row => {
+        const tr = document.createElement("tr");
+        row.forEach(cell => {
+          const td = document.createElement("td");
+          td.textContent = cell;
+          tr.appendChild(td);
+        });
+        table.appendChild(tr);
+      });
+      matrixContainer.innerHTML = "";
+      matrixContainer.appendChild(table);
     }
 
-    connectBtn.addEventListener("click", connectToServer);
-    sendTestBtn.addEventListener("click", sendTestMessage);
-
+    connectBtn.addEventListener("click", connectToVideo);
+    window.addEventListener("load", () => {
+      drawNoSignal();
+      connectToChat();
+    });
     window.addEventListener("beforeunload", () => {
-      disconnectFromServer();
+      if (videoWS) videoWS.close();
+      if (chatWS) chatWS.close();
     });
   </script>
 </body>
