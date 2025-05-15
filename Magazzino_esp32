@@ -3,7 +3,7 @@
 #include <ArduinoJson.h>
 
 // WiFi credentials
-const char* ssid = "192.168.1.150";
+const char* ssid = "TP-Link_CE88";
 const char* password = "123456789";
 
 // TCP server settings
