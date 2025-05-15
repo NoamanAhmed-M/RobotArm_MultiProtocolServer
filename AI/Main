@@ -1,1 +1,9 @@
 
+# Get YOLOv5 v5.0 (Python 3.6 compatible)
+git clone https://github.com/ultralytics/yolov5 -b v5.0
+cd yolov5
+
+# Install dependencies
+pip3 install numpy==1.19.5 opencv-python==4.5.1.48 torch==1.7.0 torchvision==0.8.1 matplotlib PyYAML==5.3.1
+
+wget https://github.com/ultralytics/yolov5/releases/download/v5.0/yolov5s.pt
