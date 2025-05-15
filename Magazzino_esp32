@@ -1,18 +1,17 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
+
 // WiFi credentials
 const char* ssid = "N";
 const char* password = "12345678";
 
 // TCP server settings
-const char* server_ip = "192.168.43.114";  //  Replace with your actual server IP
+const char* server_ip = "192.168.43.114";  // Replace with your server IP
 const uint16_t server_port = 5555;
-
-// Client identifier for server routing
 const char* client_id = "ESP_Matrix";
 
-// Matrix data (example 3x3 identity matrix)
+// Matrix data (example 3x3)
 int matrix[3][3] = {
   {1, 1, 1},
   {1, 1, 1},
@@ -20,17 +19,42 @@ int matrix[3][3] = {
 };
 
 WiFiClient client;
+unsigned long lastAttemptTime = 0;
+const unsigned long reconnectInterval = 5000;  // try every 5 seconds
+
+void connectToWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+
+  Serial.print("[WiFi] Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+  unsigned long startAttemptTime = millis();
+
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n[WiFi] Connected");
+  } else {
+    Serial.println("\n[WiFi] Failed to connect");
+  }
+}
 
 void connectToServer() {
+  if (client.connected()) return;
+
   Serial.print("[TCP] Connecting to server... ");
   if (client.connect(server_ip, server_port)) {
     Serial.println("Connected");
 
-    //  Send client name/ID as first message (plain text)
+    // Send client name/ID
     client.println(client_id);
     Serial.println("[TCP] Sent client name: " + String(client_id));
 
-    delay(500);  // Optional wait before sending matrix
+    delay(500);  // Optional
     sendMatrix();
   } else {
     Serial.println("Failed to connect");
@@ -39,11 +63,10 @@ void connectToServer() {
 
 void sendMatrix() {
   if (!client.connected()) {
-    Serial.println("[TCP]  Not connected to server");
+    Serial.println("[TCP] Not connected to server");
     return;
   }
 
-  // Create JSON matrix object
   StaticJsonDocument<256> doc;
   doc["type"] = "matrix";
   JsonArray rows = doc.createNestedArray("matrix");
@@ -54,10 +77,9 @@ void sendMatrix() {
     }
   }
 
-  // Serialize and send
   String jsonStr;
   serializeJson(doc, jsonStr);
-  client.print(jsonStr);  // Sends with newline delimiter
+  client.println(jsonStr);  // Sends JSON with newline
   Serial.println("[TCP] Sent matrix JSON:");
   Serial.println(jsonStr);
 }
@@ -65,23 +87,28 @@ void sendMatrix() {
 void setup() {
   Serial.begin(115200);
   delay(1000);
-
-  // Connect to Wi-Fi
-  Serial.print("[WiFi] Connecting to ");
-  Serial.print(ssid);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\n[WiFi]  Connected");
-
-  // Connect and send
+  connectToWiFi();
   connectToServer();
 }
 
 void loop() {
-  // Optionally resend every 10s
-  delay(10000);
-  sendMatrix();
+  // Reconnect Wi-Fi if lost
+  if (WiFi.status() != WL_CONNECTED) {
+    connectToWiFi();
+    return;
+  }
+
+  // Reconnect server if disconnected and time to retry
+  if (!client.connected() && millis() - lastAttemptTime > reconnectInterval) {
+    lastAttemptTime = millis();
+    connectToServer();
+    return;
+  }
+
+  // Send matrix every 10s if connected
+  static unsigned long lastSendTime = 0;
+  if (millis() - lastSendTime > 10000) {
+    lastSendTime = millis();
+    sendMatrix();
+  }
 }
