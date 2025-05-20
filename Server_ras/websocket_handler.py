@@ -27,20 +27,29 @@ class WebSocketHandler:
     async def handle_websocket_client(self, websocket):
         """Handles chat/control clients (e.g., Web, RobotArm)"""
         try:
-            # First message: client name
-            name = await websocket.recv()
-            if not name:
+            # Receive base name from client
+            base_name = await websocket.recv()
+            if not base_name:
                 await websocket.close()
                 return
 
+            # Assign unique name if base name already used
+            counter = 1
+            name = base_name
             with self.server.ws_lock:
+                existing_names = set(self.server.ws_clients.values())
+                while name in existing_names:
+                    name = f"{base_name}_{counter}"
+                    counter += 1
                 self.server.ws_clients[websocket] = name
+
             print(f"[WS] {name} connected")
 
             # Confirm connection
             await websocket.send(json.dumps({
                 "type": "status",
                 "msg": f"{name} connected successfully",
+                "name": name,
                 "timestamp": time.time()
             }))
 
@@ -57,14 +66,14 @@ class WebSocketHandler:
                         elif message_obj.get("value") is False:
                             print(f"[WS] ❌ OFF command received from {name}")
 
-                    # Optional: echo back
+                    # Echo back to sender
                     await websocket.send(json.dumps({
                         "type": "status",
                         "msg": f"Command received: {message_obj}",
                         "timestamp": time.time()
                     }))
 
-                    # Optional: broadcast to others
+                    # Broadcast to other WebSocket clients
                     with self.server.ws_lock:
                         for client_ws, client_name in self.server.ws_clients.items():
                             if client_ws != websocket:
@@ -73,7 +82,7 @@ class WebSocketHandler:
                                     "msg": f"{name} sent command: {message_obj}"
                                 }))
 
-                    # Route command to robot or internal logic
+                    # Route the command to the message router
                     self.server.router.route(message_obj, name, sender_type="ws")
 
                 except Exception as e:
@@ -86,11 +95,12 @@ class WebSocketHandler:
 
         finally:
             with self.server.ws_lock:
-                self.server.ws_clients.pop(websocket, None)
-            print(f"[WS] {name if 'name' in locals() else 'Unknown'} disconnected")
+                if websocket in self.server.ws_clients:
+                    print(f"[WS] {self.server.ws_clients[websocket]} disconnected")
+                    del self.server.ws_clients[websocket]
 
     async def handle_video_websocket_client(self, websocket):
-        """Sends test video frame to video canvas clients"""
+        """Handles video streaming clients"""
         try:
             client_ip = websocket.remote_address[0]
             print(f"[WS Video] Client connected from {client_ip}")
