@@ -1,7 +1,7 @@
 import threading
 import time
-from tcp_client.tcp_handler import start_tcp_client
-from udp_client.udp_camera import start_udp_camera
+from tcp_handler import start_tcp_client
+from udp_camera import start_udp_camera
 
 if __name__ == "__main__":
     print("🚀 Starting Jetson Nano Client...")
