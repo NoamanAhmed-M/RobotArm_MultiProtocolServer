@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Jetson Nano + ESP32 Client</title>
   <style>
+    :root {
+      --primary: #1976d2;
+      --primary-dark: #1565c0;
+      --light-bg: #fafafa;
+      --border-color: #ccc;
+    }
+
     * {
       box-sizing: border-box;
     }
@@ -32,10 +39,9 @@
 
     .video-container {
       width: 100%;
-      max-width: 100%;
       aspect-ratio: 4 / 3;
       background: black;
-      border: 2px solid #ccc;
+      border: 2px solid var(--border-color);
       border-radius: 6px;
       overflow: hidden;
       margin: 20px auto;
@@ -60,7 +66,7 @@
       padding: 12px;
       font-size: 1rem;
       cursor: pointer;
-      background-color: #1976d2;
+      background-color: var(--primary);
       color: white;
       border: none;
       border-radius: 6px;
@@ -68,7 +74,7 @@
     }
 
     .controls button:hover {
-      background-color: #1565c0;
+      background-color: var(--primary-dark);
       transform: scale(1.05);
     }
 
@@ -94,20 +100,32 @@
     .stats, .matrix-section {
       font-size: 0.95rem;
       margin-top: 16px;
-      word-break: break-word;
     }
 
     table {
       width: 100%;
       border-collapse: collapse;
       margin-top: 10px;
+      background-color: white;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+      border-radius: 8px;
+      overflow: hidden;
     }
 
-    td, th {
-      border: 1px solid #666;
-      padding: 8px;
+    th, td {
+      padding: 12px;
+      border: 1px solid #e0e0e0;
       text-align: center;
-      background-color: #fafafa;
+      font-family: monospace;
+      transition: background 0.3s;
+    }
+
+    tr:hover td {
+      background-color: #f1f8ff;
+    }
+
+    td {
+      background-color: #fcfcfc;
     }
 
     .toggle-header {
@@ -188,7 +206,7 @@
   </div>
 
   <script>
-    const SERVER_IP = "192.168.1.150"; // Your server IP
+    const SERVER_IP = "192.168.1.150";
     const VIDEO_WS_PORT = 8766;
     const CHAT_WS_PORT = 8765;
 
@@ -208,13 +226,8 @@
 
     function toggleLog() {
       const arrow = document.getElementById("logArrow");
-      if (messageLogDiv.style.display === "none") {
-        messageLogDiv.style.display = "block";
-        arrow.textContent = "⯆";
-      } else {
-        messageLogDiv.style.display = "none";
-        arrow.textContent = "⯈";
-      }
+      messageLogDiv.style.display = messageLogDiv.style.display === "none" ? "block" : "none";
+      arrow.textContent = messageLogDiv.style.display === "none" ? "⯈" : "⯆";
     }
 
     function logMessage(type, message) {
