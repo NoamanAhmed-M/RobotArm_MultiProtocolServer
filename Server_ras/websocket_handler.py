@@ -14,18 +14,25 @@ class WebSocketHandler:
         return websockets.serve(
             self.handle_websocket_client,
             self.server.ws_host,
-            self.server.ws_port
+            self.server.ws_port,
+            ping_interval=20,     # Heartbeat every 20s
+            ping_timeout=10,      # Close if no pong in 10s
+            close_timeout=5
         )
 
     def create_video_server(self, video_ws_port):
         return websockets.serve(
             self.handle_video_websocket_client,
             self.server.ws_host,
-            video_ws_port
+            video_ws_port,
+            ping_interval=20,
+            ping_timeout=10,
+            close_timeout=5
         )
 
     async def handle_websocket_client(self, websocket):
         """Handles chat/control clients (e.g., Web, RobotArm)"""
+        name = None
         try:
             # Receive base name from client
             base_name = await websocket.recv()
@@ -36,7 +43,7 @@ class WebSocketHandler:
             # Assign unique name if base name already used
             counter = 1
             name = base_name
-            with self.server.ws_lock:
+            async with self.server.ws_lock:
                 existing_names = set(self.server.ws_clients.values())
                 while name in existing_names:
                     name = f"{base_name}_{counter}"
@@ -73,16 +80,19 @@ class WebSocketHandler:
                         "timestamp": time.time()
                     }))
 
-                    # Broadcast to other WebSocket clients
-                    with self.server.ws_lock:
-                        for client_ws, client_name in self.server.ws_clients.items():
-                            if client_ws != websocket:
-                                await client_ws.send(json.dumps({
-                                    "type": "status",
-                                    "msg": f"{name} sent command: {message_obj}"
-                                }))
+                    # Broadcast to other clients
+                    async with self.server.ws_lock:
+                        for client_ws, client_name in list(self.server.ws_clients.items()):
+                            if client_ws != websocket and not client_ws.closed:
+                                try:
+                                    await client_ws.send(json.dumps({
+                                        "type": "status",
+                                        "msg": f"{name} sent command: {message_obj}"
+                                    }))
+                                except Exception as send_err:
+                                    print(f"[WS ERROR] Failed to send to {client_name}: {send_err}")
 
-                    # Route the command to the message router
+                    # Route the message
                     self.server.router.route(message_obj, name, sender_type="ws")
 
                 except Exception as e:
@@ -94,19 +104,22 @@ class WebSocketHandler:
             traceback.print_exc()
 
         finally:
-            with self.server.ws_lock:
-                if websocket in self.server.ws_clients:
-                    print(f"[WS] {self.server.ws_clients[websocket]} disconnected")
-                    del self.server.ws_clients[websocket]
+            try:
+                async with self.server.ws_lock:
+                    if websocket in self.server.ws_clients:
+                        disconnected_name = self.server.ws_clients.pop(websocket)
+                        print(f"[WS] {disconnected_name} disconnected")
+            except Exception as cleanup_error:
+                print(f"[WS ERROR] Cleanup failed: {cleanup_error}")
+                traceback.print_exc()
 
     async def handle_video_websocket_client(self, websocket):
         """Handles video streaming clients"""
+        client_ip = websocket.remote_address[0]
         try:
-            client_ip = websocket.remote_address[0]
             print(f"[WS Video] Client connected from {client_ip}")
             self.server.video_ws_clients.add(websocket)
 
-            # Send confirmation
             await websocket.send(json.dumps({
                 "status": "connected",
                 "message": "Video stream connected",
