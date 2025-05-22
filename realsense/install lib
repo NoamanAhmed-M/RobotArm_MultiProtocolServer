@@ -17,3 +17,12 @@ make -j4
 sudo make install
 pip3 install pyrealsense2
 realsense-viewer
+cmake .. -DBUILD_PYTHON_BINDINGS=ON -DPYTHON_EXECUTABLE=$(which python3) -DBUILD_EXAMPLES=true
+make -j$(nproc)
+sudo make install
+
+# Export Python path if needed
+export PYTHONPATH=$PYTHONPATH:/usr/local/lib
+
+# Or copy manually to your site-packages
+cp ./wrappers/python/pyrealsense2/*.so /usr/lib/python3.x/site-packages/
