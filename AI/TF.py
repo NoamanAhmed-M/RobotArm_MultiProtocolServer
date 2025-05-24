@@ -3,77 +3,67 @@ import numpy as np
 import tensorrt as trt
 import pycuda.driver as cuda
 import pycuda.autoinit
-import time
 
-# Load the TensorRT engine
-TRT_LOGGER = trt.Logger(trt.Logger.INFO)
+TRT_LOGGER = trt.Logger()
 
-def load_engine(engine_path):
-    with open(engine_path, 'rb') as f, trt.Runtime(TRT_LOGGER) as runtime:
+# Load TensorRT engine
+def load_engine(path):
+    with open(path, 'rb') as f, trt.Runtime(TRT_LOGGER) as runtime:
         return runtime.deserialize_cuda_engine(f.read())
 
-engine = load_engine("yolov5n.trt")  # Replace with your .engine file
+engine = load_engine("yolov5n.trt")
 context = engine.create_execution_context()
 
-# Get input and output details
-input_index = engine.get_binding_index('images')  # usually 'images' for YOLOv5
-output_index = engine.get_binding_index('output')  # usually 'output'
+# Get binding info
+input_idx = engine.get_binding_index("images")  # Change if needed
+output_idx = engine.get_binding_index("output")  # Change if needed
 
-input_shape = engine.get_binding_shape(input_index)
-output_shape = engine.get_binding_shape(output_index)
+input_shape = engine.get_binding_shape(input_idx)
+output_shape = engine.get_binding_shape(output_idx)
 
-input_size = (input_shape[2], input_shape[1])  # width, height
+w, h = input_shape[2], input_shape[1]
+input_size = (w, h)
 
-# Allocate device memory
-d_input = cuda.mem_alloc(trt.volume(input_shape) * np.float32().nbytes)
-d_output = cuda.mem_alloc(trt.volume(output_shape) * np.float32().nbytes)
+# Allocate memory
+d_input = cuda.mem_alloc(trt.volume(input_shape) * 4)
+d_output = cuda.mem_alloc(trt.volume(output_shape) * 4)
 bindings = [int(d_input), int(d_output)]
 
-# Helper to preprocess frames
-def preprocess(img):
-    img_resized = cv2.resize(img, input_size)
-    img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
-    img_transposed = np.transpose(img_rgb, (2, 0, 1)).astype(np.float32) / 255.0
-    return np.expand_dims(img_transposed, axis=0)
-
-# Postprocessing helper
-def postprocess(output, conf_thres=0.4):
-    output = output.reshape(-1, 6)
-    boxes = []
-    for det in output:
-        conf = det[4]
-        if conf > conf_thres:
-            x1, y1, x2, y2 = map(int, det[:4])
-            cls = int(det[5])
-            boxes.append((x1, y1, x2, y2, conf, cls))
-    return boxes
-
-# Open camera
+# Video capture
 cap = cv2.VideoCapture(0)
 
-while cap.isOpened():
+def preprocess(img):
+    img = cv2.resize(img, input_size)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = np.transpose(img, (2, 0, 1)).astype(np.float32) / 255.0
+    return np.expand_dims(img, axis=0)
+
+def postprocess(output, conf=0.4):
+    output = output.reshape(-1, 6)
+    result = []
+    for det in output:
+        x1, y1, x2, y2, conf_score, cls = det
+        if conf_score >= conf:
+            result.append((int(x1), int(y1), int(x2), int(y2), float(conf_score), int(cls)))
+    return result
+
+while True:
     ret, frame = cap.read()
     if not ret:
         break
 
-    img = preprocess(frame)
-    img = np.ascontiguousarray(img)
-
-    # Transfer to device
-    cuda.memcpy_htod(d_input, img)
+    inp = preprocess(frame)
+    cuda.memcpy_htod(d_input, inp)
     context.execute_v2(bindings)
+    out = np.empty(output_shape, dtype=np.float32)
+    cuda.memcpy_dtoh(out, d_output)
 
-    # Retrieve results
-    output = np.empty(output_shape, dtype=np.float32)
-    cuda.memcpy_dtoh(output, d_output)
-
-    # Draw results
-    for (x1, y1, x2, y2, conf, cls) in postprocess(output):
+    for (x1, y1, x2, y2, conf, cls) in postprocess(out):
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        label = f"{int(cls)}: {conf:.2f}"
-        cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(frame, f"{cls} {conf:.2f}", (x1, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-    cv2.imshow("YOLOv5 TensorRT", frame)
+    cv2.imshow("YOLOv5 TensorRT Camera", frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
