@@ -1,4 +1,4 @@
-#2
+#3
 import sys
 import cv2
 import numpy as np
@@ -38,10 +38,16 @@ config.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, 30)
 config.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8, 30)
 profile = pipeline.start(config)
 
-# Set high accuracy preset
+# Set high accuracy preset safely
 depth_sensor = profile.get_device().first_depth_sensor()
 if depth_sensor.supports(rs.option.visual_preset):
-    depth_sensor.set_option(rs.option.visual_preset, rs.option.visual_preset.high_accuracy)
+    try:
+        preset_index = 2.0  # High Accuracy
+        depth_sensor.set_option(rs.option.visual_preset, preset_index)
+        name = depth_sensor.get_option_value_description(rs.option.visual_preset, preset_index)
+        print(f"Visual Preset set to: {name}")
+    except Exception as e:
+        print(f"Failed to set visual preset: {e}")
 
 # Enable auto exposure on color sensor
 sensors = profile.get_device().query_sensors()
@@ -84,10 +90,10 @@ try:
         cv2.putText(frame, f"FPS: {1/t:.2f}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
-        # Display the result
+        # Show image
         cv2.imshow("YOLOv5 + RealSense Distance", frame)
 
-        # Optional: Depth visualization
+        # Optional: depth debug view
         depth_colormap = cv2.applyColorMap(
             cv2.convertScaleAbs(np.asanyarray(depth_frame.get_data()), alpha=0.03),
             cv2.COLORMAP_JET)
