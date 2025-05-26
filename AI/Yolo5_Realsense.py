@@ -223,7 +223,7 @@ import numpy as np
 import pyrealsense2 as rs
 from yoloDet import YoloTRT
 
-# تحميل نموذج YOLO المحول إلى TensorRT
+# Load YOLO model optimized with TensorRT
 model = YoloTRT(
     library="yolov5/buildM/libmyplugins.so",
     engine="yolov5/buildM/best.engine",
@@ -231,7 +231,7 @@ model = YoloTRT(
     yolo_ver="v5"
 )
 
-# دالة لحساب العمق الدقيق باستخدام نقاط متعددة داخل الصندوق
+# Function to calculate precise depth using multiple points inside the bounding box
 def get_precise_depth(depth_frame, x1, y1, x2, y2, sample_ratio=0.2):
     w = x2 - x1
     h = y2 - y1
@@ -258,14 +258,14 @@ def get_precise_depth(depth_frame, x1, y1, x2, y2, sample_ratio=0.2):
     filtered = depth_array[np.abs(depth_array - median) < 0.1]
     return np.mean(filtered) if filtered.size > 0 else median
 
-# إعداد كاميرا RealSense
+# Initialize RealSense pipeline
 pipeline = rs.pipeline()
 config = rs.config()
 config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
 config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
 profile = pipeline.start(config)
 
-# تفعيل وضع High Accuracy للعمق إن وُجد
+# Set depth sensor to High Accuracy preset if available
 depth_sensor = profile.get_device().first_depth_sensor()
 if depth_sensor.supports(rs.option.visual_preset):
     try:
@@ -274,12 +274,12 @@ if depth_sensor.supports(rs.option.visual_preset):
     except Exception as e:
         print("[WARNING] Failed to set visual preset:", e)
 
-# تفعيل التعريض التلقائي للصورة الملونة
+# Enable auto exposure for the color stream
 sensors = profile.get_device().query_sensors()
 if len(sensors) > 1 and sensors[1].supports(rs.option.enable_auto_exposure):
     sensors[1].set_option(rs.option.enable_auto_exposure, 1)
 
-# محاذاة العمق مع اللون
+# Align depth frame to color frame
 align = rs.align(rs.stream.color)
 
 try:
@@ -296,7 +296,7 @@ try:
         frame = np.asanyarray(color_frame.get_data())
         detections, t = model.Inference(frame)
 
-        # طباعة عدد الكائنات المكتشفة
+        # Print the number of detected objects
         print(f"[INFO] Detected {len(detections)} objects.")
 
         for det in detections:
@@ -305,10 +305,10 @@ try:
             conf = det['conf']
             label = f"{cls} {conf:.2f}"
 
-            # حساب العمق
+            # Calculate depth from RealSense
             distance = get_precise_depth(depth_frame, x1, y1, x2, y2)
 
-            # رسم الصندوق والتفاصيل
+            # Draw bounding box and details
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, label, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
@@ -317,15 +317,15 @@ try:
                 cv2.putText(frame, f"{distance:.2f} m", ((x1 + x2) // 2, (y1 + y2) // 2),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
-        # عرض FPS
+        # Display FPS
         if t > 0:
             cv2.putText(frame, f"FPS: {1/t:.2f}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-        # عرض الصورة الملونة بنتائج YOLO
+        # Show color frame with detections
         cv2.imshow("YOLOv5 + RealSense Distance", frame)
 
-        # عرض خريطة العمق
+        # Show depth map
         depth_colormap = cv2.applyColorMap(
             cv2.convertScaleAbs(np.asanyarray(depth_frame.get_data()), alpha=0.03),
             cv2.COLORMAP_JET)
