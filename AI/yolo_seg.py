@@ -1,118 +1,120 @@
-import sys
-import cv2
-import numpy as np
 import pyrealsense2 as rs
-from yoloDet import YoloTRT  # Ensure this handles segmentation output!
+import numpy as np
+import cv2
+import tensorrt as trt
+import pycuda.driver as cuda
+import pycuda.autoinit
 
-# Load YOLOv5 TensorRT segmentation model
-model = YoloTRT(
-    library="yolov5/buildM/libmyplugins.so",
-    engine="yolov5/buildM/best.engine",
-    conf=0.5,
-    yolo_ver="v5seg"  # Just a flag; adjust according to how YoloTRT handles segmentation
-)
+TRT_LOGGER = trt.Logger(trt.Logger.INFO)
 
-# Helper: Calculate average depth of mask pixels
-def get_mask_depth(depth_frame, mask, k=5):
-    coords = np.argwhere(mask)
-    if coords.size == 0:
-        return 0
-    depths = []
-    for y, x in coords[::k]:  # Sample every kth pixel to speed up
-        if 0 <= x < depth_frame.get_width() and 0 <= y < depth_frame.get_height():
-            d = depth_frame.get_distance(x, y)
-            if d > 0:
-                depths.append(d)
-    if not depths:
-        return 0
-    median = np.median(depths)
-    filtered = [d for d in depths if abs(d - median) < 0.3]
-    return np.mean(filtered) if filtered else median
+def load_engine(path):
+    with open(path, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
+        return runtime.deserialize_cuda_engine(f.read())
 
-# RealSense initialization
-pipeline = rs.pipeline()
-config = rs.config()
-config.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, 30)
-config.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8, 30)
-profile = pipeline.start(config)
+def allocate_buffers(engine):
+    inputs, outputs, bindings = [], [], []
+    stream = cuda.Stream()
+    for binding in engine:
+        shape = engine.get_binding_shape(binding)
+        size = trt.volume(shape)
+        dtype = trt.nptype(engine.get_binding_dtype(binding))
+        host_mem = cuda.pagelocked_empty(size, dtype)
+        device_mem = cuda.mem_alloc(host_mem.nbytes)
+        bindings.append(int(device_mem))
+        if engine.binding_is_input(binding):
+            inputs.append((host_mem, device_mem))
+        else:
+            outputs.append((host_mem, device_mem))
+    return inputs, outputs, bindings, stream
 
-# Set depth sensor preset to High Accuracy
-depth_sensor = profile.get_device().first_depth_sensor()
-if depth_sensor.supports(rs.option.visual_preset):
-    try:
-        depth_sensor.set_option(rs.option.visual_preset, 2.0)
-        name = depth_sensor.get_option_value_description(rs.option.visual_preset, 2.0)
-        print(f"Visual Preset set to: {name}")
-    except Exception as e:
-        print(f"Failed to set visual preset: {e}")
+def do_inference(context, bindings, inputs, outputs, stream):
+    [cuda.memcpy_htod_async(inp[1], inp[0], stream) for inp in inputs]
+    context.execute_async_v2(bindings=bindings, stream_handle=stream.handle)
+    [cuda.memcpy_dtoh_async(out[0], out[1], stream) for out in outputs]
+    stream.synchronize()
+    return [out[0] for out in outputs]
 
-# Enable auto-exposure for color stream
-sensors = profile.get_device().query_sensors()
-if len(sensors) > 1 and sensors[1].supports(rs.option.enable_auto_exposure):
-    sensors[1].set_option(rs.option.enable_auto_exposure, 1)
+def preprocess(frame, size=(640, 640)):
+    img_resized = cv2.resize(frame, size)
+    img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+    img = img_rgb.astype(np.float32) / 255.0
+    img = np.transpose(img, (2, 0, 1))
+    img = np.expand_dims(img, axis=0)
+    return frame, np.ascontiguousarray(img)
 
-align = rs.align(rs.stream.color)
-
-try:
-    while True:
-        frames = pipeline.wait_for_frames()
-        aligned_frames = align.process(frames)
-
-        depth_frame = aligned_frames.get_depth_frame()
-        color_frame = aligned_frames.get_color_frame()
-        if not depth_frame or not color_frame:
+def postprocess(detections, img_shape, conf_thresh=0.3):
+    boxes, scores, classes, masks = [], [], [], []
+    for det in detections:
+        if det[4] < conf_thresh:
             continue
+        x1, y1, x2, y2 = det[0:4]
+        score = det[4]
+        cls = int(det[5])
+        mask_coef = det[6:]  # 32 values
+        boxes.append([x1, y1, x2, y2])
+        scores.append(score)
+        classes.append(cls)
+        masks.append(mask_coef)
+    return boxes, scores, classes, masks
 
-        color_image = np.asanyarray(color_frame.get_data())
-        detections, t = model.Inference(color_image)
+def apply_mask(proto, mask_coef, box, img_shape, threshold=0.5):
+    mask = np.tensordot(mask_coef, proto, axes=([0], [0]))  # (160,160)
+    mask = 1 / (1 + np.exp(-mask))
+    mask = cv2.resize(mask, (img_shape[1], img_shape[0]))
+    x1, y1, x2, y2 = map(int, box)
+    cropped_mask = mask[y1:y2, x1:x2]
+    full_mask = np.zeros_like(mask, dtype=np.uint8)
+    full_mask[y1:y2, x1:x2] = (cropped_mask > threshold).astype(np.uint8) * 255
+    return full_mask
 
-        for det in detections:
-            x1, y1, x2, y2 = map(int, det['box'])
-            label = f"{det['class']} {det['conf']:.2f}"
+def visualize(image, masks, boxes):
+    overlay = image.copy()
+    for i, mask in enumerate(masks):
+        color_mask = np.zeros_like(image)
+        color_mask[:, :, 1] = mask
+        overlay = cv2.addWeighted(overlay, 1.0, color_mask, 0.5, 0)
+        x1, y1, x2, y2 = map(int, boxes[i])
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    return overlay
 
-            # Get mask: assuming 'mask' is a binary mask of shape (H, W)
-            mask = det.get('mask')
-            if mask is None:
+if __name__ == "__main__":
+    engine = load_engine("best_nan_sego.engine")
+    context = engine.create_execution_context()
+    inputs, outputs, bindings, stream = allocate_buffers(engine)
+
+    pipeline = rs.pipeline()
+    config = rs.config()
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+    pipeline.start(config)
+
+    try:
+        while True:
+            frames = pipeline.wait_for_frames()
+            color_frame = frames.get_color_frame()
+            if not color_frame:
                 continue
 
-            # Resize mask to match frame size if needed
-            mask_resized = cv2.resize(mask.astype(np.uint8) * 255, (color_image.shape[1], color_image.shape[0]))
-            mask_binary = (mask_resized > 128).astype(np.uint8)
+            color_image = np.asanyarray(color_frame.get_data())
+            img, input_tensor = preprocess(color_image)
+            np.copyto(inputs[0][0], input_tensor.ravel())
 
-            # Apply mask to frame
-            color_mask = np.zeros_like(color_image)
-            color_mask[:, :, 1] = mask_binary * 255  # green mask
-            segmented = cv2.addWeighted(color_image, 1.0, color_mask, 0.5, 0)
+            trt_outputs = do_inference(context, bindings, inputs, outputs, stream)
+            det_output = trt_outputs[0].reshape(-1, 39)  # (N, 39)
+            proto_output = trt_outputs[1].reshape(32, 160, 160)  # (32,160,160)
 
-            # Estimate depth from mask
-            distance = get_mask_depth(depth_frame, mask_binary)
+            boxes, scores, classes, masks = postprocess(det_output, color_image.shape, conf_thresh=0.3)
 
-            # Draw bounding box + info
-            if 0 < distance <= 5.0:
-                cv2.rectangle(segmented, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(segmented, label, (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                cv2.putText(segmented, f"{distance:.2f} m", (cx, cy),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            all_masks = []
+            for box, coef in zip(boxes, masks):
+                m = apply_mask(proto_output, coef, box, color_image.shape)
+                all_masks.append(m)
 
-            color_image = segmented
+            result = visualize(color_image, all_masks, boxes)
 
-        # FPS
-        cv2.putText(color_image, f"FPS: {1/t:.2f}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            cv2.imshow("YOLOv5 Segmentation", result)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
-        cv2.imshow("YOLOv5 Segmentation + RealSense", color_image)
-
-        # Optional: show raw depth
-        depth_colormap = cv2.applyColorMap(
-            cv2.convertScaleAbs(np.asanyarray(depth_frame.get_data()), alpha=0.03),
-            cv2.COLORMAP_JET)
-        cv2.imshow("Depth Map", depth_colormap)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-finally:
-    pipeline.stop()
-    cv2.destroyAllWindows()
+    finally:
+        pipeline.stop()
+        cv2.destroyAllWindows()
