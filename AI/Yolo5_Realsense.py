@@ -448,3 +448,106 @@ try:
 finally:
     pipeline.stop()
     cv2.destroyAllWindows()
+#6
+import sys
+import cv2
+import numpy as np
+import pyrealsense2 as rs
+from yoloDet import YoloTRT
+import time
+
+# Load YOLO-TensorRT model
+model = YoloTRT(
+    library="yolov5/buildM/libmyplugins.so",
+    engine="yolov5/buildM/best.engine",
+    conf=0.5,
+    yolo_ver="v5"
+)
+
+# Fast depth estimation around center pixel
+def get_center_depth(depth_frame, cx, cy, k=3):
+    values = []
+    for dx in range(-k//2, k//2 + 1):
+        for dy in range(-k//2, k//2 + 1):
+            x, y = cx + dx, cy + dy
+            if 0 <= x < depth_frame.get_width() and 0 <= y < depth_frame.get_height():
+                d = depth_frame.get_distance(x, y)
+                if 0 < d < 5:
+                    values.append(d)
+    if not values:
+        return 0
+    median = np.median(values)
+    filtered = [v for v in values if abs(v - median) < 0.1]  # ±10cm
+    return np.mean(filtered) if filtered else median
+
+# Setup RealSense streams
+pipeline = rs.pipeline()
+config = rs.config()
+config.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, 30)
+config.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8, 30)
+profile = pipeline.start(config)
+
+# Set high accuracy preset
+depth_sensor = profile.get_device().first_depth_sensor()
+if depth_sensor.supports(rs.option.visual_preset):
+    try:
+        depth_sensor.set_option(rs.option.visual_preset, 2.0)
+        print("Visual Preset: High Accuracy")
+    except Exception as e:
+        print("Preset error:", e)
+
+# Auto exposure for color stream
+sensors = profile.get_device().query_sensors()
+if len(sensors) > 1 and sensors[1].supports(rs.option.enable_auto_exposure):
+    sensors[1].set_option(rs.option.enable_auto_exposure, 1)
+
+# Align depth to color
+align = rs.align(rs.stream.color)
+
+# FPS monitor
+prev_time = time.time()
+
+try:
+    while True:
+        frames = pipeline.wait_for_frames()
+        aligned = align.process(frames)
+        depth = aligned.get_depth_frame()
+        color = aligned.get_color_frame()
+        if not depth or not color:
+            continue
+
+        frame = np.asanyarray(color.get_data())
+        detections, _ = model.Inference(frame)
+
+        for det in detections:
+            x1, y1, x2, y2 = map(int, det['box'])
+            cls = det['class']
+            conf = det['conf']
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+
+            distance = get_center_depth(depth, cx, cy)
+
+            # Draw box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, f"{cls} {conf:.2f}", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            if distance > 0:
+                cv2.putText(frame, f"{distance:.2f}m", (cx, cy),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+        # Compute and display FPS
+        now = time.time()
+        fps = 1 / (now - prev_time)
+        prev_time = now
+        cv2.putText(frame, f"FPS: {fps:.2f}", (10, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+
+        # Show only one lightweight window
+        cv2.imshow("YOLOv5 + Depth", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+finally:
+    pipeline.stop()
+    cv2.destroyAllWindows()
