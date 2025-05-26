@@ -1,4 +1,6 @@
+import pyrealsense2 as rs
 import numpy as np
+import cv2
 import tensorrt as trt
 import pycuda.driver as cuda
 import pycuda.autoinit
@@ -30,29 +32,95 @@ def do_inference(context, bindings, inputs, outputs, stream):
     context.execute_async_v2(bindings=bindings, stream_handle=stream.handle)
     [cuda.memcpy_dtoh_async(out[0], out[1], stream) for out in outputs]
     stream.synchronize()
-    
-    for i, out in enumerate(outputs):
-        print(f"[Output {i}] shape: {out[0].shape}, dtype: {out[0].dtype}, size: {out[0].size}")
-    
     return [out[0] for out in outputs]
 
-def dummy_input(shape=(1, 3, 640, 640)):
-    # Generate a black image for testing
-    return np.zeros(shape, dtype=np.float32)
+def preprocess(frame, size=(640, 640)):
+    img_resized = cv2.resize(frame, size)
+    img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+    img = img_rgb.astype(np.float32) / 255.0
+    img = np.transpose(img, (2, 0, 1))
+    img = np.expand_dims(img, axis=0)
+    return frame, np.ascontiguousarray(img)
+
+def postprocess(detections, img_shape, conf_thresh=0.4):
+    boxes, scores, classes, masks = [], [], [], []
+    for det in detections:
+        if det[4] < conf_thresh:
+            continue
+        x1, y1, x2, y2 = det[0:4]
+        x1 = int(x1 / 640 * img_shape[1])
+        y1 = int(y1 / 640 * img_shape[0])
+        x2 = int(x2 / 640 * img_shape[1])
+        y2 = int(y2 / 640 * img_shape[0])
+        score = det[4]
+        cls = int(det[5])
+        mask_coef = det[6:38]  # 32 coefficients
+        boxes.append([x1, y1, x2, y2])
+        scores.append(score)
+        classes.append(cls)
+        masks.append(mask_coef)
+    return boxes, scores, classes, masks
+
+def apply_mask(proto, mask_coef, box, img_shape, threshold=0.5):
+    mask = np.tensordot(mask_coef, proto, axes=([0], [0]))  # (160,160)
+    mask = 1 / (1 + np.exp(-mask))  # sigmoid
+    mask = cv2.resize(mask, (img_shape[1], img_shape[0]))
+    x1, y1, x2, y2 = box
+    mask_cropped = (mask > threshold).astype(np.uint8) * 255
+    return mask_cropped
+
+def visualize(image, masks, boxes, classes, scores):
+    overlay = image.copy()
+    for i, mask in enumerate(masks):
+        color_mask = np.zeros_like(image)
+        color_mask[:, :, 1] = mask
+        overlay = cv2.addWeighted(overlay, 1.0, color_mask, 0.5, 0)
+        x1, y1, x2, y2 = boxes[i]
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        label = f"Obj {classes[i]}: {scores[i]:.2f}"
+        cv2.putText(overlay, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    return overlay
 
 if __name__ == "__main__":
-    engine_path = "best_nan_sego.engine"  # Change if needed
-    engine = load_engine(engine_path)
+    engine = load_engine("best_nan_sego.engine")
     context = engine.create_execution_context()
     inputs, outputs, bindings, stream = allocate_buffers(engine)
 
-    # Dummy image (black input)
-    input_tensor = dummy_input()
+    pipeline = rs.pipeline()
+    config = rs.config()
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+    pipeline.start(config)
 
-    # Fill input buffer
-    np.copyto(inputs[0][0], input_tensor.ravel())
+    try:
+        while True:
+            frames = pipeline.wait_for_frames()
+            color_frame = frames.get_color_frame()
+            if not color_frame:
+                continue
 
-    # Run inference and print output shapes
-    trt_outputs = do_inference(context, bindings, inputs, outputs, stream)
+            color_image = np.asanyarray(color_frame.get_data())
+            img, input_tensor = preprocess(color_image)
+            np.copyto(inputs[0][0], input_tensor.ravel())
 
-#3
+            trt_outputs = do_inference(context, bindings, inputs, outputs, stream)
+            proto = trt_outputs[0].reshape((32, 160, 160))
+            detections = trt_outputs[1].reshape((25200, 39))
+
+            boxes, scores, classes, masks = postprocess(detections, color_image.shape, conf_thresh=0.4)
+
+            all_masks = []
+            for box, coef in zip(boxes, masks):
+                m = apply_mask(proto, coef, box, color_image.shape)
+                all_masks.append(m)
+
+            result = visualize(color_image, all_masks, boxes, classes, scores)
+
+            cv2.imshow("YOLOv5-Segmentation TensorRT", result)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    finally:
+        pipeline.stop()
+        cv2.destroyAllWindows()
+
+#4
