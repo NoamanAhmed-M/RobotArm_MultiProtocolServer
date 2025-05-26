@@ -449,11 +449,11 @@ finally:
     pipeline.stop()
     cv2.destroyAllWindows()
 #6
-import sys
 import cv2
 import numpy as np
 import pyrealsense2 as rs
 from yoloDet import YoloTRT
+import threading
 import time
 
 # Load YOLO-TensorRT model
@@ -464,7 +464,7 @@ model = YoloTRT(
     yolo_ver="v5"
 )
 
-# Fast depth estimation around center pixel
+# Depth around center
 def get_center_depth(depth_frame, cx, cy, k=3):
     values = []
     for dx in range(-k//2, k//2 + 1):
@@ -477,73 +477,100 @@ def get_center_depth(depth_frame, cx, cy, k=3):
     if not values:
         return 0
     median = np.median(values)
-    filtered = [v for v in values if abs(v - median) < 0.1]  # ±10cm
+    filtered = [v for v in values if abs(v - median) < 0.1]
     return np.mean(filtered) if filtered else median
 
-# Setup RealSense streams
+# Shared variables
+shared_frame = None
+shared_depth = None
+lock = threading.Lock()
+results = []
+
+# RealSense setup
 pipeline = rs.pipeline()
 config = rs.config()
 config.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, 30)
 config.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8, 30)
 profile = pipeline.start(config)
 
-# Set high accuracy preset
+# Depth high accuracy
 depth_sensor = profile.get_device().first_depth_sensor()
 if depth_sensor.supports(rs.option.visual_preset):
     try:
         depth_sensor.set_option(rs.option.visual_preset, 2.0)
-        print("Visual Preset: High Accuracy")
-    except Exception as e:
-        print("Preset error:", e)
+    except:
+        pass
 
-# Auto exposure for color stream
+# Auto exposure
 sensors = profile.get_device().query_sensors()
 if len(sensors) > 1 and sensors[1].supports(rs.option.enable_auto_exposure):
     sensors[1].set_option(rs.option.enable_auto_exposure, 1)
 
-# Align depth to color
 align = rs.align(rs.stream.color)
 
-# FPS monitor
-prev_time = time.time()
+# 🧵 Detection thread (runs every 0.5~1s)
+def detection_loop():
+    global shared_frame, shared_depth, results
+    while True:
+        time.sleep(0.5)
+        lock.acquire()
+        frame = shared_frame.copy() if shared_frame is not None else None
+        depth = shared_depth if shared_depth is not None else None
+        lock.release()
 
+        if frame is None or depth is None:
+            continue
+
+        detections, _ = model.Inference(frame)
+        temp_results = []
+        for det in detections:
+            x1, y1, x2, y2 = map(int, det['box'])
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            d = get_center_depth(depth, cx, cy)
+            temp_results.append({
+                'box': (x1, y1, x2, y2),
+                'class': det['class'],
+                'conf': det['conf'],
+                'depth': d
+            })
+        results = temp_results
+
+# Start detection thread
+threading.Thread(target=detection_loop, daemon=True).start()
+
+# 🎥 Main loop: fast display
 try:
     while True:
         frames = pipeline.wait_for_frames()
         aligned = align.process(frames)
-        depth = aligned.get_depth_frame()
-        color = aligned.get_color_frame()
-        if not depth or not color:
+        depth_frame = aligned.get_depth_frame()
+        color_frame = aligned.get_color_frame()
+
+        if not depth_frame or not color_frame:
             continue
 
-        frame = np.asanyarray(color.get_data())
-        detections, _ = model.Inference(frame)
+        color = np.asanyarray(color_frame.get_data())
 
-        for det in detections:
-            x1, y1, x2, y2 = map(int, det['box'])
-            cls = det['class']
-            conf = det['conf']
-            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        # Update shared frame safely
+        lock.acquire()
+        shared_frame = color.copy()
+        shared_depth = depth_frame
+        lock.release()
 
-            distance = get_center_depth(depth, cx, cy)
-
-            # Draw box
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, f"{cls} {conf:.2f}", (x1, y1 - 10),
+        # Draw results from last detection
+        for r in results:
+            x1, y1, x2, y2 = r['box']
+            label = f"{r['class']} {r['conf']:.2f}"
+            cv2.rectangle(color, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(color, label, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            if distance > 0:
-                cv2.putText(frame, f"{distance:.2f}m", (cx, cy),
+            if r['depth'] > 0:
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                cv2.putText(color, f"{r['depth']:.2f}m", (cx, cy),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
-        # Compute and display FPS
-        now = time.time()
-        fps = 1 / (now - prev_time)
-        prev_time = now
-        cv2.putText(frame, f"FPS: {fps:.2f}", (10, 25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-
-        # Show only one lightweight window
-        cv2.imshow("YOLOv5 + Depth", frame)
+        # Show fast display
+        cv2.imshow("Stream (Real-time)", color)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
@@ -551,3 +578,4 @@ try:
 finally:
     pipeline.stop()
     cv2.destroyAllWindows()
+
