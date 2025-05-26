@@ -223,7 +223,7 @@ import numpy as np
 import pyrealsense2 as rs
 from yoloDet import YoloTRT
 
-# Load YOLO model optimized with TensorRT
+# Load YOLO-TensorRT model
 model = YoloTRT(
     library="yolov5/buildM/libmyplugins.so",
     engine="yolov5/buildM/best.engine",
@@ -231,7 +231,7 @@ model = YoloTRT(
     yolo_ver="v5"
 )
 
-# Function to calculate precise depth using multiple points inside the bounding box
+# Improved depth estimation with inner sampling
 def get_precise_depth(depth_frame, x1, y1, x2, y2, sample_ratio=0.2):
     w = x2 - x1
     h = y2 - y1
@@ -258,28 +258,30 @@ def get_precise_depth(depth_frame, x1, y1, x2, y2, sample_ratio=0.2):
     filtered = depth_array[np.abs(depth_array - median) < 0.1]
     return np.mean(filtered) if filtered.size > 0 else median
 
-# Initialize RealSense pipeline
+# Initialize RealSense
 pipeline = rs.pipeline()
 config = rs.config()
-config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+config.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, 30)
+config.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8, 30)
 profile = pipeline.start(config)
 
-# Set depth sensor to High Accuracy preset if available
+# Set high accuracy preset
 depth_sensor = profile.get_device().first_depth_sensor()
 if depth_sensor.supports(rs.option.visual_preset):
     try:
-        depth_sensor.set_option(rs.option.visual_preset, 2.0)
-        print("[INFO] Visual preset set to High Accuracy.")
+        preset_index = 2.0  # High Accuracy
+        depth_sensor.set_option(rs.option.visual_preset, preset_index)
+        name = depth_sensor.get_option_value_description(rs.option.visual_preset, preset_index)
+        print(f"Visual Preset set to: {name}")
     except Exception as e:
-        print("[WARNING] Failed to set visual preset:", e)
+        print(f"Failed to set visual preset: {e}")
 
-# Enable auto exposure for the color stream
+# Auto exposure for color
 sensors = profile.get_device().query_sensors()
 if len(sensors) > 1 and sensors[1].supports(rs.option.enable_auto_exposure):
     sensors[1].set_option(rs.option.enable_auto_exposure, 1)
 
-# Align depth frame to color frame
+# Align depth to color
 align = rs.align(rs.stream.color)
 
 try:
@@ -290,14 +292,10 @@ try:
         depth_frame = aligned_frames.get_depth_frame()
         color_frame = aligned_frames.get_color_frame()
         if not depth_frame or not color_frame:
-            print("[WARNING] Missing frame(s), skipping.")
             continue
 
         frame = np.asanyarray(color_frame.get_data())
         detections, t = model.Inference(frame)
-
-        # Print the number of detected objects
-        print(f"[INFO] Detected {len(detections)} objects.")
 
         for det in detections:
             x1, y1, x2, y2 = map(int, det['box'])
@@ -305,27 +303,29 @@ try:
             conf = det['conf']
             label = f"{cls} {conf:.2f}"
 
-            # Calculate depth from RealSense
+            # Calculate center for fallback depth location
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+
+            # Try precise depth first
             distance = get_precise_depth(depth_frame, x1, y1, x2, y2)
 
-            # Draw bounding box and details
+            # Always draw box and label
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, label, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
             if distance > 0:
-                cv2.putText(frame, f"{distance:.2f} m", ((x1 + x2) // 2, (y1 + y2) // 2),
+                cv2.putText(frame, f"{distance:.2f} m", (cx, cy),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
-        # Display FPS
-        if t > 0:
-            cv2.putText(frame, f"FPS: {1/t:.2f}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        # Show FPS
+        cv2.putText(frame, f"FPS: {1/t:.2f}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
-        # Show color frame with detections
+        # Show image
         cv2.imshow("YOLOv5 + RealSense Distance", frame)
 
-        # Show depth map
+        # Depth debug view
         depth_colormap = cv2.applyColorMap(
             cv2.convertScaleAbs(np.asanyarray(depth_frame.get_data()), alpha=0.03),
             cv2.COLORMAP_JET)
