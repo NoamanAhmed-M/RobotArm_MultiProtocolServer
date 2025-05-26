@@ -135,3 +135,6 @@ sudo apt install tensorrt python3-libnvinfer-dev
 /usr/src/tensorrt/bin/trtexec --version
 echo 'export PATH=$PATH:/usr/src/tensorrt/bin' >> ~/.bashrc
 source ~/.bashrc
+trtexec --onnx=best_nan_sego.onnx --saveEngine="best_nan_sego.engine" --fp32
+trtexec --onnx=best_nan_sego.onnx --saveEngine=best_nan_sego.engine --fp32
+--saveEngine=/home/its/Desktop/best_nan_sego_fp32.engine
