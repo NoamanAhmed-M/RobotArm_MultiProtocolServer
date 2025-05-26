@@ -124,3 +124,6 @@ if __name__ == "__main__":
         cv2.destroyAllWindows()
 
 #4
+trtexec --onnx=best_nan_sego.onnx --saveEngine=best_nan_sego.engine --fp32
+python export.py --weights best_nan_sego.pt --img 640 --include onnx --opset 12 --dynamic
+pip install onnxruntime
