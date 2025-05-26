@@ -150,3 +150,5 @@ dpkg -l | grep tensorrt
 pip install onnxruntime
 
 
+----
+trtexec --onnx=/home/its/Desktop/nano_best.onnx --saveEngine=/home/its/Desktop/nano_best.engine --fp32 --verbose
