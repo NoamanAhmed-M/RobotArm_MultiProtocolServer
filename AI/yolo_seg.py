@@ -138,3 +138,5 @@ source ~/.bashrc
 trtexec --onnx=best_nan_sego.onnx --saveEngine="best_nan_sego.engine" --fp32
 trtexec --onnx=best_nan_sego.onnx --saveEngine=best_nan_sego.engine --fp32
 --saveEngine=/home/its/Desktop/best_nan_sego_fp32.engine
+trtexec --onnx=/home/its/Desktop/yolov5/best_nan_sego.onnx --saveEngine=/home/its/Desktop/yolov5/best_nan_sego_fp32.engine --fp32 --verbose
+
