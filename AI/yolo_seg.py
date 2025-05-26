@@ -141,5 +141,12 @@ trtexec --onnx=best_nan_sego.onnx --saveEngine=best_nan_sego.engine --fp32
 trtexec --onnx=/home/its/Desktop/yolov5/best_nan_sego.onnx --saveEngine=/home/its/Desktop/yolov5/best_nan_sego_fp32.engine --fp32 --verbose
 ---------
 trtexec --onnx=/home/its/Desktop/nano_best.onnx --saveEngine=/home/its/Desktop/nano_best.engine --fp32
+onnxchecker /home/its/Desktop/nano_best.onnx
+pip install onnx
+python3 -c "import onnx; onnx.checker.check_model(onnx.load('/home/its/Desktop/nano_best.onnx'))"
+trtexec --onnx=/home/its/Desktop/nano_best.onnx --saveEngine=/home/its/Desktop/nano_best.engine --fp32 --verbose
+dpkg -l | grep tensorrt
+!python export.py --weights nano_best.pt --include onnx --img 640 --opset 11
+pip install onnxruntime
 
 
