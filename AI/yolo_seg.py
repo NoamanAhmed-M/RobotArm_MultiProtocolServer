@@ -127,3 +127,11 @@ if __name__ == "__main__":
 trtexec --onnx=best_nan_sego.onnx --saveEngine=best_nan_sego.engine --fp32
 python export.py --weights best_nan_sego.pt --img 640 --include onnx --opset 12 --dynamic
 pip install onnxruntime
+sudo find / -name trtexec 2>/dev/null
+/usr/src/tensorrt/bin/trtexec
+sudo apt update
+sudo apt install tensorrt
+sudo apt install tensorrt python3-libnvinfer-dev
+/usr/src/tensorrt/bin/trtexec --version
+echo 'export PATH=$PATH:/usr/src/tensorrt/bin' >> ~/.bashrc
+source ~/.bashrc
