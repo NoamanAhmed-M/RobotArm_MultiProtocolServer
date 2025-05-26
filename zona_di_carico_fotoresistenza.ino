@@ -1,18 +1,19 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
+#include <ArduinoJson.h>
 
 const int fotoR = 34;
 const int soglia = 400;
 int stato;
 
-//data del router
-const char* ssid = "TP-Link_WE66";
-const char* password = "123456789";
+// WiFi credentials
+const char* ssid = "Andrea's Galaxy A35 5G";
+const char* password = "Andrea216";
 
-// TCP server settings
-const char* server_ip = "192.168.100.150"; // questo e' l'IP del nostro server
-const uint16_t server_port = 5555;
-const char* client_id = "ESP_Carico";
+// TCP server settings - CORRECTED
+const char* server_ip = "192.168.99.232"; // Updated server IP
+const uint16_t server_port = 5555; // TCP port confirmed as 5555
+const char* client_id = "ESP_Matrix"; // CORRECTED to match routing table
 
 WiFiClient client;
 
@@ -47,27 +48,31 @@ void sendData() {
     connectToServer();
     return;
   }
-
+  
   int carico = analogRead(fotoR);
-  Serial.println(analogRead(fotoR));
+  Serial.print("[Sensor] Raw reading: ");
+  Serial.println(carico);
   
-  //Serial.print("[TCP] Carico letto: ");
-  //Serial.println(carico);
-
-  //int stato = (carico >= soglia) ? 1 : 0;
-
+  if (carico >= soglia) {
+    stato = 0;
+  } else {
+    stato = 1;
+  }
   
-if (carico >= soglia) {
-  stato = 1;
-} else {
-  stato = 0;
-}
-
-  // invio in formato semplice e leggibile
-  client.println(String(stato));
-  Serial.print("[TCP] Stato inviato: ");
+  // Create simple JSON without matrix
+  StaticJsonDocument<100> doc;
+  doc["state"] = stato;
+  doc["sensor_value"] = carico;
+  
+  // Convert to string and send
+  String jsonString;
+  serializeJson(doc, jsonString);
+  client.println(jsonString);
+  
+  Serial.print("[TCP] Data sent: ");
+  Serial.println(jsonString);
+  Serial.print("[TCP] Sensor state: ");
   Serial.println(stato);
-  stato = 0;
 }
 
 void setup() {
@@ -80,5 +85,5 @@ void setup() {
 
 void loop() {
   sendData();
-  delay(1000); // invio ogni secondo
+  delay(2000); // Send every 2 seconds to avoid flooding
 }
