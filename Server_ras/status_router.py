@@ -10,6 +10,7 @@ class MessageRouter:
             "ESP_Matrix": ["Web"],
             "Web": ["RobotArm"],
             "ESP_Boolean": ["Web", "RobotArm"],
+            "ESP_Sensor": ["Web"]:, #added ESP32 routing
             "RobotArm": ["Web"]
         }
 
