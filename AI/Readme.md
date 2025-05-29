@@ -37,3 +37,16 @@ from google.colab import files
 files.download('runs/train/mario_model/weights/best.pt')
 
 **note that, on the training command change Your project with your project’s name created by Roboflow ex. /content/yolov5/MarioOD.v1i.yolov5pytorch/
+from models.yolo import Model
+====================
+from google.colab import files
+files.download('runs/train/FFRoboArm/weights/best.pt')
+===================================
+import torch
+
+ckpt = torch.load("runs/train/FFRoboArm/weights/best.pt", map_location="cpu")
+
+model = Model("models/yolov5s.yaml", ch=3, nc=4)  # عدد الفئات حسب مشروعك
+model.load_state_dict(ckpt['model'].float().state_dict())  # تحميل الأوزان
+
+torch.save({'model': model}, "best_windows.pt")  # ✅ هذا الشكل هو المطلوب
