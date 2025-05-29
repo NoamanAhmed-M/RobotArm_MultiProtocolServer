@@ -46,7 +46,7 @@ import torch
 
 ckpt = torch.load("runs/train/FFRoboArm/weights/best.pt", map_location="cpu")
 
-model = Model("models/yolov5s.yaml", ch=3, nc=4)  # عدد الفئات حسب مشروعك
-model.load_state_dict(ckpt['model'].float().state_dict())  # تحميل الأوزان
+model = Model("models/yolov5s.yaml", ch=3, nc=4)  
+model.load_state_dict(ckpt['model'].float().state_dict())  
 
-torch.save({'model': model}, "best_windows.pt")  # ✅ هذا الشكل هو المطلوب
+torch.save({'model': model}, "best_windows.pt")  # 
