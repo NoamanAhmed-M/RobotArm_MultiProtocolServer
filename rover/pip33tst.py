@@ -11,3 +11,5 @@ time.sleep(3)
 print("Turning GPIO19 OFF")
 GPIO.output(19, GPIO.LOW)
 GPIO.cleanup()
+sudo /opt/nvidia/jetson-io/jetson-io.py
+sudo cat /sys/kernel/debug/gpio
