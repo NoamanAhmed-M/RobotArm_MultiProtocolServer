@@ -1,4 +1,4 @@
-#3Add commentMore actions
+#3
 import sys
 import cv2
 import numpy as np
@@ -218,5 +218,5 @@ finally:
     cv2.destroyAllWindows()
 #3
 import cv2
-import numpy as np
+import numpy as npAdd commentMore actions
 import pyrealsense2 as rs
