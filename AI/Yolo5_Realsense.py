@@ -1,9 +1,10 @@
-
 import cv2
 import numpy as np
 import pyrealsense2 as rs
 from yoloDet import YoloTRT
 import time
+from pathfinding.core.grid import Grid
+from pathfinding.finder.a_star import AStarFinder
 
 # Load YOLO-TensorRT model
 model = YoloTRT(
@@ -28,6 +29,32 @@ def get_center_depth(depth_frame, cx, cy, k=3):
     median = np.median(values)
     filtered = [v for v in values if abs(v - median) < 0.1]
     return np.mean(filtered) if filtered else median
+
+# Build local occupancy grid from depth frame
+def build_occupancy_grid(depth_frame, grid_size=20):
+    grid = [[0 for _ in range(grid_size)] for _ in range(grid_size)]
+    width = depth_frame.get_width()
+    height = depth_frame.get_height()
+
+    for i in range(grid_size):
+        for j in range(grid_size):
+            x = int(width * (i / grid_size))
+            y = int(height * (j / grid_size))
+            d = depth_frame.get_distance(x, y)
+            if 0 < d < 0.3:
+                grid[j][i] = 1
+    return grid
+
+# Map object detection to grid coordinates
+def map_object_to_grid(cx, cy, depth, frame_width, frame_height, grid_size=20):
+    fx = (cx - frame_width // 2) / frame_width
+    fy = (cy - frame_height // 2) / frame_height
+    dx = int(fx * grid_size)
+    dy = int(fy * grid_size)
+
+    gx = grid_size // 2 + dx
+    gy = grid_size // 2 + dy
+    return min(max(gx, 0), grid_size - 1), min(max(gy, 0), grid_size - 1)
 
 # Initialize RealSense camera
 pipeline = rs.pipeline()
@@ -97,6 +124,24 @@ try:
                 cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
                 cv2.putText(frame, f"{r['depth']:.2f} m", (cx, cy),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+                # Build grid and draw A* path
+                grid_map = build_occupancy_grid(depth_frame)
+                frame_h, frame_w = frame.shape[:2]
+                gx, gy = map_object_to_grid(cx, cy, r['depth'], frame_w, frame_h)
+
+                grid = Grid(matrix=grid_map)
+                start = grid.node(grid.width // 2, grid.height // 2)
+                end = grid.node(gx, gy)
+                finder = AStarFinder()
+                path, _ = finder.find_path(start, end, grid)
+
+                for i in range(len(path) - 1):
+                    x1, y1 = path[i]
+                    x2, y2 = path[i + 1]
+                    pt1 = (int((x1 / 20) * frame_w), int((y1 / 20) * frame_h))
+                    pt2 = (int((x2 / 20) * frame_w), int((y2 / 20) * frame_h))
+                    cv2.line(frame, pt1, pt2, (255, 0, 0), 2)
 
         # Display stream
         cv2.imshow("YOLOv5 + RealSense Stream", frame)
