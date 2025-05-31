@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Jetson Nano + ESP32 Client</title>
   <style>
     :root {
@@ -97,9 +98,73 @@
       color: #c62828;
     }
 
-    .stats, .matrix-section {
+    .stats,
+    .matrix-section,
+    .sensor-section {
       font-size: 0.95rem;
       margin-top: 16px;
+    }
+
+    .sensor-section {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 8px;
+      border-left: 4px solid var(--primary);
+    }
+
+    .sensor-data {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .sensor-item {
+      background: white;
+      padding: 10px;
+      border-radius: 6px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .sensor-value {
+      font-size: 1.2em;
+      font-weight: bold;
+      color: var(--primary);
+    }
+
+    .sensor-state {
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-size: 0.9em;
+      font-weight: bold;
+    }
+
+    .sensor-state.active {
+      background: #4caf50;
+      color: white;
+    }
+
+    .sensor-state.inactive {
+      background: #f44336;
+      color: white;
+    }
+
+    .api-status {
+      background: #fff3e0;
+      padding: 10px;
+      border-radius: 6px;
+      margin-top: 10px;
+      border-left: 4px solid #ff9800;
+    }
+
+    .api-status.success {
+      background: #e8f5e9;
+      border-left-color: #4caf50;
+    }
+
+    .api-status.error {
+      background: #ffebee;
+      border-left-color: #f44336;
     }
 
     table {
@@ -112,7 +177,8 @@
       overflow: hidden;
     }
 
-    th, td {
+    th,
+    td {
       padding: 12px;
       border: 1px solid #e0e0e0;
       text-align: center;
@@ -160,18 +226,49 @@
       padding-bottom: 5px;
     }
 
-    .log-time { color: #999; margin-right: 10px; }
-    .log-type { font-weight: bold; margin-right: 10px; }
-    .log-type.info { color: #2196F3; }
-    .log-type.error { color: #F44336; }
-    .log-type.frame { color: #4CAF50; }
+    .log-time {
+      color: #999;
+      margin-right: 10px;
+    }
+
+    .log-type {
+      font-weight: bold;
+      margin-right: 10px;
+    }
+
+    .log-type.info {
+      color: #2196F3;
+    }
+
+    .log-type.error {
+      color: #F44336;
+    }
+
+    .log-type.frame {
+      color: #4CAF50;
+    }
+
+    .log-type.sensor {
+      color: #FF9800;
+    }
 
     @media (max-width: 600px) {
-      h1 { font-size: 1.3rem; }
-      .controls button { font-size: 0.9rem; padding: 10px; }
+      h1 {
+        font-size: 1.3rem;
+      }
+
+      .controls button {
+        font-size: 0.9rem;
+        padding: 10px;
+      }
+
+      .sensor-data {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
+
 <body>
   <div class="container">
     <h1>Jetson Nano Video + ESP32 Matrix Client</h1>
@@ -186,12 +283,41 @@
       <button id="connectBtn">Connect to Stream</button>
       <button onclick="sendCommand(true)">Turn ON</button>
       <button onclick="sendCommand(false)">Turn OFF</button>
+      <button onclick="testAPI()">Test API Connection</button>
     </div>
 
     <div class="stats">
       <div><strong>Status:</strong> <span id="connectionStatus">Disconnected</span></div>
       <div><strong>Server:</strong> <span id="serverInfo">Not connected</span></div>
       <div><strong>Last frame:</strong> <span id="lastFrameTime">Never</span></div>
+    </div>
+
+    <!-- API Status -->
+    <div id="apiStatus" class="api-status">
+      <strong>API Status:</strong> <span id="apiStatusText">Not tested</span>
+    </div>
+
+    <!-- ESP32 Sensor Data Section -->
+    <div class="sensor-section">
+      <h3>ESP32 Sensor Data</h3>
+      <div class="sensor-data">
+        <div class="sensor-item">
+          <div><strong>Sensor Value:</strong></div>
+          <div class="sensor-value" id="sensorValue">--</div>
+        </div>
+        <div class="sensor-item">
+          <div><strong>State:</strong></div>
+          <div class="sensor-state" id="sensorState">Unknown</div>
+        </div>
+        <div class="sensor-item">
+          <div><strong>Threshold:</strong></div>
+          <div id="sensorThreshold">--</div>
+        </div>
+        <div class="sensor-item">
+          <div><strong>Last Update:</strong></div>
+          <div id="sensorLastUpdate">Never</div>
+        </div>
+      </div>
     </div>
 
     <div class="matrix-section">
@@ -206,9 +332,15 @@
   </div>
 
   <script>
-    const SERVER_IP = "192.168.1.150";
+    // ⚠️ CHANGE THIS TO YOUR RASPBERRY PI'S IP ADDRESS
+    const SERVER_IP = "172.20.10.5";  // Update this to your Pi's actual IP
     const VIDEO_WS_PORT = 8766;
     const CHAT_WS_PORT = 8765;
+    const HTTP_API_PORT = 8080;
+
+    // Polling configuration
+    const POLL_INTERVAL = 3000; // Poll every 3 seconds
+    const API_BASE_URL = `http://${SERVER_IP}:${HTTP_API_PORT}/api`;
 
     const videoCanvas = document.getElementById("videoCanvas");
     const ctx = videoCanvas.getContext("2d");
@@ -220,9 +352,20 @@
     const messageLogDiv = document.getElementById("messageLog");
     const matrixContainer = document.getElementById("matrixContainer");
 
+    // API Status elements
+    const apiStatusDiv = document.getElementById("apiStatus");
+    const apiStatusText = document.getElementById("apiStatusText");
+
+    // Sensor data elements
+    const sensorValueEl = document.getElementById("sensorValue");
+    const sensorStateEl = document.getElementById("sensorState");
+    const sensorThresholdEl = document.getElementById("sensorThreshold");
+    const sensorLastUpdateEl = document.getElementById("sensorLastUpdate");
+
     let videoWS = null;
     let chatWS = null;
     let isConnected = false;
+    let pollingInterval = null;
 
     function toggleLog() {
       const arrow = document.getElementById("logArrow");
@@ -237,13 +380,18 @@
       const logEntry = document.createElement("div");
       logEntry.className = "log-entry";
       logEntry.innerHTML = `<span class="log-time">${timeStr}</span>
-                            <span class="log-type ${type}">${type.toUpperCase()}</span>
-                            <span>${message}</span>`;
+                        <span class="log-type ${type}">${type.toUpperCase()}</span>
+                        <span>${message}</span>`;
       messageLogDiv.appendChild(logEntry);
       messageLogDiv.scrollTop = messageLogDiv.scrollHeight;
       if (messageLogDiv.childElementCount > 100) {
         messageLogDiv.removeChild(messageLogDiv.firstChild);
       }
+    }
+
+    function updateAPIStatus(success, message) {
+      apiStatusText.textContent = message;
+      apiStatusDiv.className = success ? "api-status success" : "api-status error";
     }
 
     function drawNoSignal() {
@@ -253,6 +401,118 @@
       ctx.font = "24px Arial";
       ctx.textAlign = "center";
       ctx.fillText("No Signal", videoCanvas.width / 2, videoCanvas.height / 2);
+    }
+
+    function updateSensorDisplay(data) {
+      sensorValueEl.textContent = data.sensor_value || '--';
+      sensorThresholdEl.textContent = data.threshold || '--';
+
+      // Update state with styling
+      const state = data.state;
+      if (state !== undefined) {
+        sensorStateEl.textContent = state === 1 ? 'ACTIVE' : 'INACTIVE';
+        sensorStateEl.className = state === 1 ? 'sensor-state active' : 'sensor-state inactive';
+      }
+
+      sensorLastUpdateEl.textContent = data.last_update || 'Unknown';
+      logMessage("sensor", `Sensor: ${data.sensor_value}, State: ${state}, Threshold: ${data.threshold}`);
+    }
+
+    // Test API connection
+    async function testAPI() {
+      logMessage("info", "Testing API connection...");
+      try {
+        const response = await fetch(`${API_BASE_URL}/status`, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          updateAPIStatus(true, `API Connected - Server running since ${new Date(data.timestamp * 1000).toLocaleTimeString()}`);
+          logMessage("info", "API test successful: " + JSON.stringify(data));
+        } else {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+      } catch (error) {
+        updateAPIStatus(false, `API Error: ${error.message}`);
+        logMessage("error", "API test failed: " + error.message);
+        console.error('API Test Error:', error);
+      }
+    }
+
+    // Fetch sensor data
+    async function fetchSensorData() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/sensor`, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          updateSensorDisplay(data);
+          updateAPIStatus(true, "API Connected - Sensor data updated");
+        } else {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+      } catch (error) {
+        console.error('Error fetching sensor data:', error);
+        updateAPIStatus(false, `Sensor fetch error: ${error.message}`);
+        logMessage("error", "Failed to fetch sensor data: " + error.message);
+      }
+    }
+
+    // Fetch matrix data
+    async function fetchMatrixData() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/matrix`, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.matrix) {
+            displayMatrix(data.matrix);
+            logMessage("info", "Matrix received and displayed via HTTP");
+          }
+        } else {
+          console.error('Failed to fetch matrix data:', response.status);
+        }
+      } catch (error) {
+        console.error('Error fetching matrix data:', error);
+      }
+    }
+
+    // Start polling
+    function startDataPolling() {
+      // Test API first
+      testAPI();
+      
+      // Initial fetch after a delay
+      setTimeout(() => {
+        fetchSensorData();
+        fetchMatrixData();
+      }, 1000);
+
+      // Set up polling intervals
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+      }
+      
+      pollingInterval = setInterval(() => {
+        fetchSensorData();
+        fetchMatrixData();
+      }, POLL_INTERVAL);
+
+      logMessage("info", `Started HTTP polling every ${POLL_INTERVAL}ms`);
     }
 
     function connectToVideo() {
@@ -290,10 +550,10 @@
         }
       };
 
-      videoWS.onerror = () => {
+      videoWS.onerror = (error) => {
         statusDiv.className = "status error";
         statusDiv.textContent = "Video WebSocket Error";
-        logMessage("error", "Video WebSocket error");
+        logMessage("error", "Video WebSocket error: " + error);
       };
 
       videoWS.onclose = () => {
@@ -308,26 +568,33 @@
     }
 
     function connectToChat() {
+      logMessage("info", `Connecting to chat ws://${SERVER_IP}:${CHAT_WS_PORT}`);
       chatWS = new WebSocket(`ws://${SERVER_IP}:${CHAT_WS_PORT}`);
+      
       chatWS.onopen = () => {
         chatWS.send("Web");
         logMessage("info", "Chat WebSocket connected and identified as Web");
       };
+      
       chatWS.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          if (msg.type === "matrix" && msg.matrix) {
-            displayMatrix(msg.matrix);
-            logMessage("info", "Matrix received and displayed");
-          } else {
-            logMessage("info", "Message: " + JSON.stringify(msg));
+          // Handle non-data messages only (commands, status, etc.)
+          if (msg.type !== "matrix" && msg.type !== "sensor_data") {
+            logMessage("info", "Chat message: " + JSON.stringify(msg));
           }
         } catch (e) {
           logMessage("error", "Failed to parse chat message: " + e.message);
         }
       };
-      chatWS.onerror = () => logMessage("error", "Chat WebSocket error");
-      chatWS.onclose = () => logMessage("info", "Chat WebSocket closed");
+      
+      chatWS.onerror = (error) => {
+        logMessage("error", "Chat WebSocket error: " + error);
+      };
+      
+      chatWS.onclose = () => {
+        logMessage("info", "Chat WebSocket closed");
+      };
     }
 
     function sendCommand(state) {
@@ -340,29 +607,43 @@
     }
 
     function displayMatrix(matrix) {
+      if (!Array.isArray(matrix) || matrix.length === 0) {
+        matrixContainer.innerHTML = "Invalid matrix data";
+        return;
+      }
+      
       const table = document.createElement("table");
       matrix.forEach(row => {
-        const tr = document.createElement("tr");
-        row.forEach(cell => {
-          const td = document.createElement("td");
-          td.textContent = cell;
-          tr.appendChild(td);
-        });
-        table.appendChild(tr);
+        if (Array.isArray(row)) {
+          const tr = document.createElement("tr");
+          row.forEach(cell => {
+            const td = document.createElement("td");
+            td.textContent = cell;
+            tr.appendChild(td);
+          });
+          table.appendChild(tr);
+        }
       });
       matrixContainer.innerHTML = "";
       matrixContainer.appendChild(table);
     }
 
     connectBtn.addEventListener("click", connectToVideo);
+
     window.addEventListener("load", () => {
       drawNoSignal();
       connectToChat();
+      startDataPolling();
     });
+
     window.addEventListener("beforeunload", () => {
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+      }
       if (videoWS) videoWS.close();
       if (chatWS) chatWS.close();
     });
   </script>
 </body>
+
 </html>
