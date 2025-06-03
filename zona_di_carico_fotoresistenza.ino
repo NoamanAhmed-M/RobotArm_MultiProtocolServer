@@ -27,6 +27,8 @@ const unsigned long reconnectInterval = 5000; // Reconnect attempt every 5 secon
 int reconnectCount = 0;
 int messagesSent = 0;
 bool isConnectedToServer = false;
+int wifiRetryCount = 0;
+const int maxWifiRetries = 10;
 
 void connectToWiFi()
 {
@@ -34,34 +36,65 @@ void connectToWiFi()
   Serial.print(ssid);
 
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED)
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) // Max 10 seconds
   {
     delay(500);
     Serial.print(".");
+    attempts++;
   }
+  
   if (WiFi.status() == WL_CONNECTED)
   {
     Serial.println("\n[WiFi] Connected");
     Serial.print("[WiFi] IP address: ");
     Serial.println(WiFi.localIP());
+    wifiRetryCount = 0; // Reset retry count on successful connection
   }
   else
   {
     Serial.println("\n[WiFi] Failed to connect");
-    Serial.println("[WiFi] Restarting " + clientNameIs + "...");
-    delay(1000);
-    ESP.restart();
+    wifiRetryCount++;
+    
+    if (wifiRetryCount >= maxWifiRetries)
+    {
+      Serial.println("[WiFi] Max retries reached. Restarting " + clientNameIs + "...");
+      delay(1000);
+      ESP.restart();
+    }
+    else
+    {
+      Serial.println("[WiFi] Will retry in 5 seconds...");
+      delay(5000);
+    }
   }
 }
 
 bool connectToServer()
 {
   Serial.print("[TCP] Connecting to server... ");
+  
+  // Clean up any existing connection
+  if (client.connected()) {
+    client.stop();
+  }
+  
   if (client.connect(server_ip, server_port))
   {
     Serial.println("Connected");
     client.println(client_id); // send client ID to server
     Serial.println("[TCP] Sent client ID: " + String(client_id));
+
+    // Wait for server acknowledgment (optional but recommended)
+    unsigned long timeout = millis() + 3000; // 3 second timeout
+    while (!client.available() && millis() < timeout) {
+      delay(10);
+    }
+    
+    if (client.available()) {
+      String response = client.readStringUntil('\n');
+      Serial.println("[TCP] Server response: " + response);
+    }
 
     // Send initial connection message
     StaticJsonDocument<200> doc;
@@ -76,12 +109,14 @@ bool connectToServer()
 
     isConnectedToServer = true;
     reconnectCount++;
+    lastReconnectAttempt = millis(); // Update reconnect timing
     return true;
   }
   else
   {
     Serial.println("Failed to connect to server.");
     isConnectedToServer = false;
+    lastReconnectAttempt = millis(); // Update reconnect timing
     return false;
   }
 }
@@ -96,12 +131,17 @@ void sendData()
     return;
   }
 
+  // Check TCP connection with reconnect interval
   if (!client.connected())
   {
-    Serial.println("[TCP] Disconnected. Reconnecting...");
-    client.stop();
-    isConnectedToServer = false;
-    connectToServer();
+    unsigned long currentTime = millis();
+    if (currentTime - lastReconnectAttempt >= reconnectInterval)
+    {
+      Serial.println("[TCP] Disconnected. Reconnecting...");
+      client.stop();
+      isConnectedToServer = false;
+      connectToServer();
+    }
     return;
   }
 
@@ -109,13 +149,14 @@ void sendData()
   Serial.print("[Sensor] Raw reading: ");
   Serial.println(carico);
 
+  // Determine state based on threshold
   if (carico >= soglia)
   {
-    stato = 0;
+    stato = 1; // High light level (not covered)
   }
   else
   {
-    stato = 1;
+    stato = 0; // Low light level (covered/blocked)
   }
 
   // Create JSON message
@@ -123,20 +164,28 @@ void sendData()
   doc["type"] = "sensor_data";
   doc["state"] = stato;
   doc["sensor_value"] = carico;
-  doc["threshold"] = soglia; // Fixed typo: was "sogila"
+  doc["threshold"] = soglia;
   doc["timestamp"] = millis();
   doc["message_id"] = messagesSent + 1;
+  doc["client_name"] = clientNameIs;
 
   // Convert to string and send
   String jsonString;
   serializeJson(doc, jsonString);
-  client.println(jsonString);
-
-  messagesSent++;
-  Serial.print("[TCP] Data sent: ");
-  Serial.println(jsonString);
-  Serial.print("[TCP] Sensor state: ");
-  Serial.println(stato);
+  
+  if (client.println(jsonString))
+  {
+    messagesSent++;
+    Serial.print("[TCP] Data sent: ");
+    Serial.println(jsonString);
+    Serial.print("[TCP] Sensor state: ");
+    Serial.println(stato == 1 ? "CLEAR" : "BLOCKED");
+  }
+  else
+  {
+    Serial.println("[TCP] Failed to send data");
+    isConnectedToServer = false;
+  }
 }
 
 void setup()
@@ -148,10 +197,25 @@ void setup()
   Serial.println("Client Name: " + clientNameIs);
   Serial.println("Client ID: " + String(client_id));
   Serial.println("Target Server: " + String(server_ip) + ":" + String(server_port));
+  Serial.println("Sensor Threshold: " + String(soglia));
 
-  connectToWiFi();
-  connectToServer();
+  // Set WiFi mode
+  WiFi.mode(WIFI_STA);
+  
+  // Configure photoresistor pin
   pinMode(fotoR, INPUT);
+
+  // Connect to WiFi with retry logic
+  while (WiFi.status() != WL_CONNECTED && wifiRetryCount < maxWifiRetries)
+  {
+    connectToWiFi();
+  }
+
+  // Connect to server
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    connectToServer();
+  }
 
   Serial.println("=== Setup Complete ===");
 }
@@ -165,6 +229,13 @@ void loop()
   {
     sendData();
     lastSendTime = currentTime;
+  }
+
+  // Handle any incoming data from server (optional)
+  if (client.available())
+  {
+    String incomingData = client.readStringUntil('\n');
+    Serial.println("[TCP] Received: " + incomingData);
   }
 
   delay(100); // Small delay to prevent overwhelming the loop
