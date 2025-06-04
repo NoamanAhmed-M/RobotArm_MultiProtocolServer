@@ -1,5 +1,3 @@
-# Full integration of YOLO + RealSense + A* pathfinding + GPIO motor control on Jetson Nano
-
 import cv2
 import numpy as np
 import pyrealsense2 as rs
@@ -8,13 +6,21 @@ import heapq
 import Jetson.GPIO as GPIO
 from yoloDet import YoloTRT
 
+# YOLO model
+model = YoloTRT(
+    library="yolov5/buildMM/libmyplugins.so",
+    engine="yolov5/buildMM/bestt.engine",
+    conf=0.5,
+    yolo_ver="v5"
+)
+
 # === GPIO Setup ===
-IN1 = 9    # Pin 21
-IN2 = 10   # Pin 22
-ENA = 18   # Pin 32
-IN3 = 11   # Pin 23
-IN4 = 8    # Pin 24
-ENB = 19   # Pin 33
+IN1 = 7
+IN2 = 11
+ENA = 13
+IN3 = 27
+IN4 = 16
+ENB = 18
 
 GPIO.setmode(GPIO.BCM)
 for pin in [IN1, IN2, ENA, IN3, IN4, ENB]:
@@ -32,7 +38,7 @@ def software_pwm(pin, duty_cycle, frequency, duration):
         GPIO.output(pin, GPIO.LOW)
         time.sleep(off_time)
 
-def motor_a_forward(speed, duration):
+def motor_a_forward(speed, duration):  # Right
     GPIO.output(IN1, GPIO.HIGH)
     GPIO.output(IN2, GPIO.LOW)
     software_pwm(ENA, speed, 100, duration)
@@ -42,7 +48,7 @@ def motor_a_backward(speed, duration):
     GPIO.output(IN2, GPIO.HIGH)
     software_pwm(ENA, speed, 100, duration)
 
-def motor_b_forward(speed, duration):
+def motor_b_forward(speed, duration):  # Left
     GPIO.output(IN3, GPIO.HIGH)
     GPIO.output(IN4, GPIO.LOW)
     software_pwm(ENB, speed, 100, duration)
@@ -62,46 +68,23 @@ def stop_all():
 
 def move_step(dx, dy):
     speed = 0.4
-    duration = 0.5
-    if dx == 1 and dy == 0:
+    duration = 0.3
+    if dx == 1 and dy == 0:  # Right
         motor_a_forward(speed, duration)
         motor_b_backward(speed, duration)
-    elif dx == -1 and dy == 0:
+    elif dx == -1 and dy == 0:  # Left
         motor_a_backward(speed, duration)
         motor_b_forward(speed, duration)
-    elif dx == 0 and dy == 1:
-        motor_a_backward(speed, duration)
-        motor_b_backward(speed, duration)
-    elif dx == 0 and dy == -1:
+    elif dx == 0 and dy == -1:  # Forward
         motor_a_forward(speed, duration)
         motor_b_forward(speed, duration)
+    elif dx == 0 and dy == 1:  # Backward
+        motor_a_backward(speed, duration)
+        motor_b_backward(speed, duration)
     stop_all()
     time.sleep(0.1)
 
-# === YOLO Model ===
-model = YoloTRT(
-    library="yolov5/buildM/libmyplugins.so",
-    engine="yolov5/buildM/best.engine",
-    conf=0.5,
-    yolo_ver="v5"
-)
-
-# === Helper Functions ===
-def get_center_depth(depth_frame, cx, cy, k=3):
-    values = []
-    for dx in range(-k//2, k//2 + 1):
-        for dy in range(-k//2, k//2 + 1):
-            x, y = cx + dx, cy + dy
-            if 0 <= x < depth_frame.get_width() and 0 <= y < depth_frame.get_height():
-                d = depth_frame.get_distance(x, y)
-                if 0 < d < 5:
-                    values.append(d)
-    if not values:
-        return 0
-    median = np.median(values)
-    filtered = [v for v in values if abs(v - median) < 0.1]
-    return np.mean(filtered) if filtered else median
-
+# === Depth & A* ===
 class Node:
     def __init__(self, x, y, cost=0, heuristic=0, parent=None):
         self.x = x
@@ -162,7 +145,7 @@ def map_object_to_grid(cx, cy, depth, frame_width, frame_height, grid_size=20):
     gy = grid_size // 2 + dy
     return min(max(gx, 0), grid_size - 1), min(max(gy, 0), grid_size - 1)
 
-# === RealSense Init ===
+# === RealSense ===
 pipeline = rs.pipeline()
 config = rs.config()
 config.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, 30)
@@ -197,14 +180,42 @@ try:
                 goal = (gx, gy)
                 path = astar(grid_map, start, goal)
 
+                # رسم الخريطة والمسار
+                map_vis = np.ones((200, 200, 3), dtype=np.uint8) * 255
+                cell_size = 10
+                for y in range(20):
+                    for x in range(20):
+                        color = (255, 255, 255)
+                        if grid_map[y][x] == 1:
+                            color = (0, 0, 255)
+                        cv2.rectangle(map_vis, (x*cell_size, y*cell_size),
+                                      ((x+1)*cell_size, (y+1)*cell_size), color, -1)
+                for (x, y) in path:
+                    cv2.rectangle(map_vis, (x*cell_size, y*cell_size),
+                                  ((x+1)*cell_size, (y+1)*cell_size), (0, 255, 255), -1)
+                cv2.rectangle(map_vis, (start[0]*cell_size, start[1]*cell_size),
+                              ((start[0]+1)*cell_size, (start[1]+1)*cell_size), (255, 0, 0), -1)
+                cv2.rectangle(map_vis, (goal[0]*cell_size, goal[1]*cell_size),
+                              ((goal[0]+1)*cell_size, (goal[1]+1)*cell_size), (0, 255, 0), -1)
+                frame[0:200, 0:200] = cv2.resize(map_vis, (200, 200))
+
+                # تنفيذ الحركة خطوة بخطوة
                 for i in range(len(path)-1):
                     dx = path[i+1][0] - path[i][0]
                     dy = path[i+1][1] - path[i][1]
                     move_step(dx, dy)
 
-                stop_all()
-                time.sleep(1)
-                break
+                # رسم معلومات الكائن
+                label = f"{det['class']} {det['conf']:.2f}"
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, label, (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                cv2.putText(frame, f"{depth:.2f} m", (cx, cy),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+        cv2.imshow("YOLOv5 + RealSense + A* Navigation", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
 finally:
     stop_all()
