@@ -144,6 +144,21 @@ def map_object_to_grid(cx, cy, depth, frame_width, frame_height, grid_size=20):
     gx = grid_size // 2 + dx
     gy = grid_size // 2 + dy
     return min(max(gx, 0), grid_size - 1), min(max(gy, 0), grid_size - 1)
+def get_center_depth(depth_frame, cx, cy, k=3):
+    values = []
+    for dx in range(-k//2, k//2 + 1):
+        for dy in range(-k//2, k//2 + 1):
+            x, y = cx + dx, cy + dy
+            if 0 <= x < depth_frame.get_width() and 0 <= y < depth_frame.get_height():
+                d = depth_frame.get_distance(x, y)
+                if 0 < d < 5:
+                    values.append(d)
+    if not values:
+        return 0
+    median = np.median(values)
+    filtered = [v for v in values if abs(v - median) < 0.1]
+    return np.mean(filtered) if filtered else median
+
 
 # === RealSense ===
 pipeline = rs.pipeline()
