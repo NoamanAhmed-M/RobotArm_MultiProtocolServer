@@ -1,53 +1,37 @@
-#!/usr/bin/env python3
+# Full integration of YOLO + RealSense + A* pathfinding + GPIO motor control on Jetson Nano
 
-import Jetson.GPIO as GPIO
-import time
 import cv2
 import numpy as np
-import threading
-from collections import deque
-import math
+import pyrealsense2 as rs
+import time
+import heapq
+import Jetson.GPIO as GPIO
+from yoloDet import YoloTRT
 
-# === Pin Definitions ===
-# Motor A
+# === GPIO Setup ===
 IN1 = 9    # Pin 21
 IN2 = 10   # Pin 22
 ENA = 18   # Pin 32
-
-# Motor B
 IN3 = 11   # Pin 23
 IN4 = 8    # Pin 24
 ENB = 19   # Pin 33
 
-# === Setup ===
 GPIO.setmode(GPIO.BCM)
-
 for pin in [IN1, IN2, ENA, IN3, IN4, ENB]:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
 
-# === Global Variables ===
-target_object = None
-obstacle_map = {}
-current_position = {'x': 0, 'y': 0, 'angle': 0}
-navigation_path = []
-detection_active = False
-camera = None
-
-# === Software PWM Function ===
 def software_pwm(pin, duty_cycle, frequency, duration):
     period = 1.0 / frequency
     on_time = period * duty_cycle
     off_time = period * (1 - duty_cycle)
     end_time = time.time() + duration
-
     while time.time() < end_time:
         GPIO.output(pin, GPIO.HIGH)
         time.sleep(on_time)
         GPIO.output(pin, GPIO.LOW)
         time.sleep(off_time)
 
-# === Motor Functions ===
 def motor_a_forward(speed, duration):
     GPIO.output(IN1, GPIO.HIGH)
     GPIO.output(IN2, GPIO.LOW)
@@ -76,399 +60,154 @@ def stop_all():
     GPIO.output(ENA, GPIO.LOW)
     GPIO.output(ENB, GPIO.LOW)
 
-# === Advanced Movement Functions ===
-def move_forward(speed=0.5, duration=1.0):
-    """Move both motors forward"""
-    print(f"Moving forward at {speed*100}% speed for {duration}s")
-    GPIO.output(IN1, GPIO.HIGH)
-    GPIO.output(IN2, GPIO.LOW)
-    GPIO.output(IN3, GPIO.HIGH)
-    GPIO.output(IN4, GPIO.LOW)
-    
-    # Run both motors simultaneously
-    end_time = time.time() + duration
-    period = 1.0 / 100  # 100 Hz frequency
-    on_time = period * speed
-    off_time = period * (1 - speed)
-    
-    while time.time() < end_time:
-        GPIO.output(ENA, GPIO.HIGH)
-        GPIO.output(ENB, GPIO.HIGH)
-        time.sleep(on_time)
-        GPIO.output(ENA, GPIO.LOW)
-        GPIO.output(ENB, GPIO.LOW)
-        time.sleep(off_time)
-    
-    # Update position estimate
-    current_position['y'] += duration * speed * 10  # Rough estimate
-
-def move_backward(speed=0.5, duration=1.0):
-    """Move both motors backward"""
-    print(f"Moving backward at {speed*100}% speed for {duration}s")
-    GPIO.output(IN1, GPIO.LOW)
-    GPIO.output(IN2, GPIO.HIGH)
-    GPIO.output(IN3, GPIO.LOW)
-    GPIO.output(IN4, GPIO.HIGH)
-    
-    end_time = time.time() + duration
-    period = 1.0 / 100
-    on_time = period * speed
-    off_time = period * (1 - speed)
-    
-    while time.time() < end_time:
-        GPIO.output(ENA, GPIO.HIGH)
-        GPIO.output(ENB, GPIO.HIGH)
-        time.sleep(on_time)
-        GPIO.output(ENA, GPIO.LOW)
-        GPIO.output(ENB, GPIO.LOW)
-        time.sleep(off_time)
-    
-    current_position['y'] -= duration * speed * 10
-
-def turn_left(speed=0.4, duration=0.5):
-    """Turn left by rotating motors in opposite directions"""
-    print(f"Turning left at {speed*100}% speed for {duration}s")
-    GPIO.output(IN1, GPIO.LOW)   # Motor A backward
-    GPIO.output(IN2, GPIO.HIGH)
-    GPIO.output(IN3, GPIO.HIGH)  # Motor B forward
-    GPIO.output(IN4, GPIO.LOW)
-    
-    end_time = time.time() + duration
-    period = 1.0 / 100
-    on_time = period * speed
-    off_time = period * (1 - speed)
-    
-    while time.time() < end_time:
-        GPIO.output(ENA, GPIO.HIGH)
-        GPIO.output(ENB, GPIO.HIGH)
-        time.sleep(on_time)
-        GPIO.output(ENA, GPIO.LOW)
-        GPIO.output(ENB, GPIO.LOW)
-        time.sleep(off_time)
-    
-    current_position['angle'] -= 45  # Rough estimate
-
-def turn_right(speed=0.4, duration=0.5):
-    """Turn right by rotating motors in opposite directions"""
-    print(f"Turning right at {speed*100}% speed for {duration}s")
-    GPIO.output(IN1, GPIO.HIGH)  # Motor A forward
-    GPIO.output(IN2, GPIO.LOW)
-    GPIO.output(IN3, GPIO.LOW)   # Motor B backward
-    GPIO.output(IN4, GPIO.HIGH)
-    
-    end_time = time.time() + duration
-    period = 1.0 / 100
-    on_time = period * speed
-    off_time = period * (1 - speed)
-    
-    while time.time() < end_time:
-        GPIO.output(ENA, GPIO.HIGH)
-        GPIO.output(ENB, GPIO.HIGH)
-        time.sleep(on_time)
-        GPIO.output(ENA, GPIO.LOW)
-        GPIO.output(ENB, GPIO.LOW)
-        time.sleep(off_time)
-    
-    current_position['angle'] += 45  # Rough estimate
-
-# === Object Detection Functions ===
-def initialize_camera():
-    """Initialize camera for object detection"""
-    global camera
-    try:
-        camera = cv2.VideoCapture(0)  # Use default camera
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        print("Camera initialized successfully")
-        return True
-    except Exception as e:
-        print(f"Failed to initialize camera: {e}")
-        return False
-
-def detect_objects(duration=2.0):
-    """Detect objects for specified duration and create initial map"""
-    global target_object, detection_active
-    
-    if camera is None:
-        print("Camera not initialized")
-        return None
-    
-    print(f"Starting object detection for {duration} seconds...")
-    detection_active = True
-    
-    # Simple color-based object detection (you can replace with YOLO/other models)
-    detected_objects = []
-    end_time = time.time() + duration
-    
-    while time.time() < end_time and detection_active:
-        ret, frame = camera.read()
-        if not ret:
-            continue
-        
-        # Convert to HSV for better color detection
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        
-        # Example: Detect red objects (adjust HSV ranges as needed)
-        lower_red = np.array([0, 50, 50])
-        upper_red = np.array([10, 255, 255])
-        mask1 = cv2.inRange(hsv, lower_red, upper_red)
-        
-        lower_red = np.array([170, 50, 50])
-        upper_red = np.array([180, 255, 255])
-        mask2 = cv2.inRange(hsv, lower_red, upper_red)
-        
-        mask = mask1 + mask2
-        
-        # Find contours
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area > 500:  # Filter small objects
-                # Get bounding box
-                x, y, w, h = cv2.boundingRect(contour)
-                center_x = x + w // 2
-                center_y = y + h // 2
-                
-                # Estimate distance based on object size (rough approximation)
-                distance = max(1, 10000 / area)  # Inverse relationship
-                
-                detected_objects.append({
-                    'center': (center_x, center_y),
-                    'size': area,
-                    'distance': distance,
-                    'bbox': (x, y, w, h)
-                })
-        
-        # Small delay to prevent overwhelming the processor
-        time.sleep(0.1)
-    
-    detection_active = False
-    
-    if detected_objects:
-        # Select the largest object as target
-        target_object = max(detected_objects, key=lambda obj: obj['size'])
-        print(f"Target object detected at distance: {target_object['distance']:.2f}")
-        return target_object
-    else:
-        print("No objects detected")
-        return None
-
-def detect_obstacles():
-    """Continuously detect obstacles and update map"""
-    global obstacle_map
-    
-    if camera is None:
-        return []
-    
-    ret, frame = camera.read()
-    if not ret:
-        return []
-    
-    # Simple obstacle detection using edge detection
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150)
-    
-    # Find contours that might be obstacles
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    obstacles = []
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        if area > 200:  # Filter small noise
-            x, y, w, h = cv2.boundingRect(contour)
-            center_x = x + w // 2
-            
-            # Determine if obstacle is on left, center, or right
-            frame_width = frame.shape[1]
-            if center_x < frame_width // 3:
-                position = 'left'
-            elif center_x > 2 * frame_width // 3:
-                position = 'right'
-            else:
-                position = 'center'
-            
-            obstacles.append({
-                'position': position,
-                'size': area,
-                'bbox': (x, y, w, h)
-            })
-    
-    # Update obstacle map
-    obstacle_map = {obs['position']: obs for obs in obstacles}
-    return obstacles
-
-# === Path Planning Functions ===
-def create_initial_path_to_target():
-    """Create initial path to target object"""
-    global navigation_path, target_object
-    
-    if target_object is None:
-        return []
-    
-    # Simple path: move forward towards target
-    distance = target_object['distance']
-    steps = max(1, int(distance / 2))  # Divide journey into steps
-    
-    navigation_path = []
-    for i in range(steps):
-        navigation_path.append({
-            'action': 'forward',
-            'speed': 0.5,
-            'duration': 1.0
-        })
-    
-    print(f"Created path with {len(navigation_path)} steps to target")
-    return navigation_path
-
-def update_path_for_obstacles(obstacles):
-    """Update navigation path to avoid obstacles"""
-    global navigation_path
-    
-    if not obstacles or not navigation_path:
-        return navigation_path
-    
-    # Simple obstacle avoidance strategy
-    modified_path = []
-    
-    for step in navigation_path:
-        if step['action'] == 'forward':
-            # Check if path is blocked
-            center_blocked = any(obs['position'] == 'center' for obs in obstacles)
-            left_blocked = any(obs['position'] == 'left' for obs in obstacles)
-            right_blocked = any(obs['position'] == 'right' for obs in obstacles)
-            
-            if center_blocked:
-                if not right_blocked:
-                    # Turn right, move forward, turn left
-                    modified_path.extend([
-                        {'action': 'turn_right', 'speed': 0.4, 'duration': 0.5},
-                        {'action': 'forward', 'speed': 0.5, 'duration': 1.5},
-                        {'action': 'turn_left', 'speed': 0.4, 'duration': 0.5}
-                    ])
-                elif not left_blocked:
-                    # Turn left, move forward, turn right
-                    modified_path.extend([
-                        {'action': 'turn_left', 'speed': 0.4, 'duration': 0.5},
-                        {'action': 'forward', 'speed': 0.5, 'duration': 1.5},
-                        {'action': 'turn_right', 'speed': 0.4, 'duration': 0.5}
-                    ])
-                else:
-                    # Both sides blocked, back up and reassess
-                    modified_path.append({
-                        'action': 'backward', 'speed': 0.5, 'duration': 1.0
-                    })
-            else:
-                # Path clear, proceed as planned
-                modified_path.append(step)
-        else:
-            modified_path.append(step)
-    
-    navigation_path = modified_path
-    print(f"Updated path with {len(navigation_path)} steps (obstacle avoidance)")
-    return navigation_path
-
-# === Navigation Execution ===
-def execute_navigation_step(step):
-    """Execute a single navigation step"""
-    action = step['action']
-    speed = step.get('speed', 0.5)
-    duration = step.get('duration', 1.0)
-    
-    if action == 'forward':
-        move_forward(speed, duration)
-    elif action == 'backward':
-        move_backward(speed, duration)
-    elif action == 'turn_left':
-        turn_left(speed, duration)
-    elif action == 'turn_right':
-        turn_right(speed, duration)
-    else:
-        print(f"Unknown action: {action}")
-    
-    # Stop motors after each step
+def move_step(dx, dy):
+    speed = 0.4
+    duration = 0.5
+    if dx == 1 and dy == 0:
+        motor_a_forward(speed, duration)
+        motor_b_backward(speed, duration)
+    elif dx == -1 and dy == 0:
+        motor_a_backward(speed, duration)
+        motor_b_forward(speed, duration)
+    elif dx == 0 and dy == 1:
+        motor_a_backward(speed, duration)
+        motor_b_backward(speed, duration)
+    elif dx == 0 and dy == -1:
+        motor_a_forward(speed, duration)
+        motor_b_forward(speed, duration)
     stop_all()
-    time.sleep(0.2)  # Brief pause between actions
+    time.sleep(0.1)
 
-def navigate_to_target():
-    """Main navigation function"""
-    global navigation_path
-    
-    if not navigation_path:
-        print("No navigation path available")
-        return
-    
-    print(f"Starting navigation with {len(navigation_path)} steps")
-    
-    for i, step in enumerate(navigation_path):
-        print(f"Executing step {i+1}/{len(navigation_path)}: {step['action']}")
-        
-        # Check for obstacles before each step
-        obstacles = detect_obstacles()
-        if obstacles:
-            print(f"Obstacles detected: {[obs['position'] for obs in obstacles]}")
-            # Update remaining path
-            remaining_path = navigation_path[i:]
-            updated_path = update_path_for_obstacles(obstacles)
-            navigation_path = navigation_path[:i] + updated_path
-        
-        # Execute the step
-        execute_navigation_step(step)
-        
-        # Small delay for stability
-        time.sleep(0.5)
-    
-    print("Navigation completed!")
+# === YOLO Model ===
+model = YoloTRT(
+    library="yolov5/buildM/libmyplugins.so",
+    engine="yolov5/buildM/best.engine",
+    conf=0.5,
+    yolo_ver="v5"
+)
 
-# === Main Autonomous Function ===
-def autonomous_navigation():
-    """Main function that orchestrates the autonomous navigation"""
-    try:
-        # Initialize camera
-        if not initialize_camera():
-            print("Cannot proceed without camera")
-            return
-        
-        print("=== Starting Autonomous Navigation System ===")
-        
-        # Step 1: Detect target object for 2 seconds
-        print("\n1. Object Detection Phase")
-        target = detect_objects(duration=2.0)
-        
-        if target is None:
-            print("No target detected. Stopping.")
-            return
-        
-        # Step 2: Create initial path to target
-        print("\n2. Path Planning Phase")
-        create_initial_path_to_target()
-        
-        # Step 3: Navigate with obstacle avoidance
-        print("\n3. Navigation Phase")
-        navigate_to_target()
-        
-        print("\n=== Mission Complete ===")
-        
-    except KeyboardInterrupt:
-        print("\nNavigation interrupted by user")
-    except Exception as e:
-        print(f"Error during navigation: {e}")
-    finally:
-        stop_all()
-        if camera:
-            camera.release()
-        cv2.destroyAllWindows()
+# === Helper Functions ===
+def get_center_depth(depth_frame, cx, cy, k=3):
+    values = []
+    for dx in range(-k//2, k//2 + 1):
+        for dy in range(-k//2, k//2 + 1):
+            x, y = cx + dx, cy + dy
+            if 0 <= x < depth_frame.get_width() and 0 <= y < depth_frame.get_height():
+                d = depth_frame.get_distance(x, y)
+                if 0 < d < 5:
+                    values.append(d)
+    if not values:
+        return 0
+    median = np.median(values)
+    filtered = [v for v in values if abs(v - median) < 0.1]
+    return np.mean(filtered) if filtered else median
 
-# === Main Logic ===
-if __name__ == "__main__":
-    try:
-        # Run the autonomous navigation system
-        autonomous_navigation()
-        
-    finally:
-        stop_all()
-        GPIO.cleanup()
-        if camera:
-            camera.release()
-        cv2.destroyAllWindows()
-        print("GPIO cleanup complete.")
+class Node:
+    def __init__(self, x, y, cost=0, heuristic=0, parent=None):
+        self.x = x
+        self.y = y
+        self.cost = cost
+        self.heuristic = heuristic
+        self.parent = parent
+    def __lt__(self, other):
+        return (self.cost + self.heuristic) < (other.cost + other.heuristic)
+
+def astar(grid, start, goal):
+    open_set = []
+    heapq.heappush(open_set, Node(*start, 0, heuristic(start, goal)))
+    visited = set()
+    while open_set:
+        current = heapq.heappop(open_set)
+        if (current.x, current.y) == goal:
+            return reconstruct_path(current)
+        visited.add((current.x, current.y))
+        for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
+            nx, ny = current.x + dx, current.y + dy
+            if 0 <= nx < len(grid[0]) and 0 <= ny < len(grid):
+                if grid[ny][nx] == 1 or (nx, ny) in visited:
+                    continue
+                neighbor = Node(nx, ny, current.cost + 1, heuristic((nx, ny), goal), current)
+                heapq.heappush(open_set, neighbor)
+    return []
+
+def heuristic(a, b):
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+def reconstruct_path(node):
+    path = []
+    while node:
+        path.append((node.x, node.y))
+        node = node.parent
+    return path[::-1]
+
+def build_occupancy_grid(depth_frame, grid_size=20):
+    grid = [[0 for _ in range(grid_size)] for _ in range(grid_size)]
+    width = depth_frame.get_width()
+    height = depth_frame.get_height()
+    for i in range(grid_size):
+        for j in range(grid_size):
+            x = int(width * (i / grid_size))
+            y = int(height * (j / grid_size))
+            d = depth_frame.get_distance(x, y)
+            if 0 < d < 0.3:
+                grid[j][i] = 1
+    return grid
+
+def map_object_to_grid(cx, cy, depth, frame_width, frame_height, grid_size=20):
+    fx = (cx - frame_width // 2) / frame_width
+    fy = (cy - frame_height // 2) / frame_height
+    dx = int(fx * grid_size)
+    dy = int(fy * grid_size)
+    gx = grid_size // 2 + dx
+    gy = grid_size // 2 + dy
+    return min(max(gx, 0), grid_size - 1), min(max(gy, 0), grid_size - 1)
+
+# === RealSense Init ===
+pipeline = rs.pipeline()
+config = rs.config()
+config.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, 30)
+config.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8, 30)
+profile = pipeline.start(config)
+align = rs.align(rs.stream.color)
+
+# === Main Loop ===
+try:
+    while True:
+        frames = pipeline.wait_for_frames()
+        aligned = align.process(frames)
+        depth_frame = aligned.get_depth_frame()
+        color_frame = aligned.get_color_frame()
+        if not depth_frame or not color_frame:
+            continue
+
+        frame = np.asanyarray(color_frame.get_data())
+        detections, _ = model.Inference(frame)
+
+        if detections:
+            det = detections[0]
+            x1, y1, x2, y2 = map(int, det['box'])
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            depth = get_center_depth(depth_frame, cx, cy)
+            frame_h, frame_w = frame.shape[:2]
+
+            if depth > 0:
+                grid_map = build_occupancy_grid(depth_frame)
+                gx, gy = map_object_to_grid(cx, cy, depth, frame_w, frame_h)
+                start = (len(grid_map[0])//2, len(grid_map)//2)
+                goal = (gx, gy)
+                path = astar(grid_map, start, goal)
+
+                for i in range(len(path)-1):
+                    dx = path[i+1][0] - path[i][0]
+                    dy = path[i+1][1] - path[i][1]
+                    move_step(dx, dy)
+
+                stop_all()
+                time.sleep(1)
+                break
+
+finally:
+    stop_all()
+    GPIO.cleanup()
+    pipeline.stop()
+    cv2.destroyAllWindows()
