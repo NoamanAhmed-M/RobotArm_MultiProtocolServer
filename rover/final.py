@@ -5,14 +5,14 @@ import time
 
 # === Pin Definitions ===
 # Motor A
-IN1 = 9    # Pin 21
-IN2 = 10   # Pin 22
-ENA = 18   # Pin 32
+IN1 = 7    # Pin 21
+IN2 = 11   # Pin 22
+ENA = 13   # Pin 32
 
 # Motor B
-IN3 = 11   # Pin 23
-IN4 = 8    # Pin 24
-ENB = 19   # Pin 33
+IN3 = 27   # Pin 23
+IN4 = 16    # Pin 24
+ENB = 18   # Pin 33
 
 # === Setup ===
 GPIO.setmode(GPIO.BCM)
@@ -32,6 +32,19 @@ def software_pwm(pin, duty_cycle, frequency, duration):
         GPIO.output(pin, GPIO.HIGH)
         time.sleep(on_time)
         GPIO.output(pin, GPIO.LOW)
+        time.sleep(off_time)
+def software_pwm_both_motor(pin,pin2, duty_cycle, frequency, duration):
+    period = 1.0 / frequency
+    on_time = period * duty_cycle
+    off_time = period * (1 - duty_cycle)
+    end_time = time.time() + duration
+
+    while time.time() < end_time:
+        GPIO.output(pin, GPIO.HIGH)
+        GPIO.output(pin2, GPIO.HIGH)
+        time.sleep(on_time)
+        GPIO.output(pin, GPIO.LOW)
+        GPIO.output(pin2, GPIO.LOW)
         time.sleep(off_time)
 
 # === Motor Functions ===
@@ -54,6 +67,20 @@ def motor_b_backward(speed, duration):
     GPIO.output(IN3, GPIO.LOW)
     GPIO.output(IN4, GPIO.HIGH)
     software_pwm(ENB, speed, 100, duration)
+def motor_a_b_backward(speed, duration):
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.HIGH)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.HIGH)
+    software_pwm(ENA, speed, 100, duration)
+    software_pwm(ENB, speed, 100, duration)
+def motor_a_b_forward(speed, duration):
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.HIGH)
+    software_pwm_both_motor(ENB,ENA,speed,100,duration)
+
 
 def stop_all():
     GPIO.output(IN1, GPIO.LOW)
@@ -65,13 +92,11 @@ def stop_all():
 
 # === Main Logic ===
 try:
-    print("Motor A Forward (75%), Motor B Backward (50%)")
-    motor_a_forward(0.75, 3)     # 75% speed, 3 sec
-    motor_b_backward(0.50, 3)    # 50% speed, 3 sec
-
+    print("forward")
+    motor_a_b_forward(0.5, 3)     # 75% speed, 3 sec
+    print("done")
     print("Reverse Directions")
-    motor_a_backward(1.0, 2)
-    motor_b_forward(0.3, 2)
+    motor_a_b_backward(1.0, 2)
 
     print("Stop all motors")
     stop_all()
