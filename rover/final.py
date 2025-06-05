@@ -57,8 +57,8 @@ def synchronized_pwm(pin_a, pin_b, duty_a, duty_b, frequency, duration):
 def motors_forward(speed_a, speed_b, duration):
     GPIO.output(IN1, GPIO.HIGH)
     GPIO.output(IN2, GPIO.LOW)
-    GPIO.output(IN3, GPIO.HIGH)
-    GPIO.output(IN4, GPIO.LOW)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, HIGH)
     synchronized_pwm(ENA, ENB, speed_a, speed_b, 100, duration)
 
 def motors_backward(speed_a, speed_b, duration):
