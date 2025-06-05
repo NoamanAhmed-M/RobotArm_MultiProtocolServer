@@ -15,33 +15,33 @@ class DataAPIHandler(BaseHTTPRequestHandler):
     
     def do_GET(self):
         """Handle GET requests for data"""
-        print("HTTP GET request")
+        print(f"HTTP GET request: {self.path}")
         parsed_path = urlparse(self.path)
         path = parsed_path.path
         query_params = parse_qs(parsed_path.query)
-        
-        # Enable CORS
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         
         try:
             if path == '/api/sensor':
                 print("api/sensor PATH")
                 data = self.data_handler.get_sensor_data()
-                print(f"Collected sensor data from file: {data}")  # ✅ Fixed: proper string formatting
+                print(f"Collected sensor data from file: {data}")
                 self._send_json_response(data)
             
             elif path == '/api/matrix':
+                print("api/matrix PATH")
                 data = self.data_handler.get_matrix_data()
+                print(f"Collected matrix data from file: {data}")
                 self._send_json_response(data)
             
             elif path == '/api/sensor/history':
+                print("api/sensor/history PATH")
                 hours = int(query_params.get('hours', [24])[0])
                 data = self.data_handler.get_sensor_history(hours)
+                print(f"Collected sensor history: {len(data) if data else 0} entries")
                 self._send_json_response(data)
             
             elif path == '/api/status':
+                print("api/status PATH")
                 status = {
                     "server": "running",
                     "timestamp": time.time(),
@@ -53,10 +53,13 @@ class DataAPIHandler(BaseHTTPRequestHandler):
                 self._send_json_response(status)
             
             else:
+                print(f"Unknown path: {path}")
                 self._send_error_response(404, "Endpoint not found")
         
         except Exception as e:
-            print(f"[HTTP API] Error: {e}")
+            print(f"[HTTP API] Error processing request: {e}")
+            import traceback
+            traceback.print_exc()
             self._send_error_response(500, f"Server error: {str(e)}")
     
     def do_OPTIONS(self):
@@ -69,23 +72,44 @@ class DataAPIHandler(BaseHTTPRequestHandler):
     
     def _send_json_response(self, data):
         """Send JSON response"""
-        print(f"Sending to client: {data}")  # ✅ Fixed: proper string formatting
         if data is None:
+            print("Data is None, sending 404")
             self._send_error_response(404, "Data not found")
             return
         
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
+        try:
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+            self.end_headers()
+            
+            json_data = json.dumps(data, indent=2)
+            self.wfile.write(json_data.encode('utf-8'))
+            print(f"Sent JSON response: {len(json_data)} bytes")
+            
+        except Exception as e:
+            print(f"Error sending JSON response: {e}")
+            self._send_error_response(500, "Failed to send response")
     
     def _send_error_response(self, code, message):
         """Send error response"""
-        self.send_response(code)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        error_data = {"error": message, "code": code}
-        self.wfile.write(json.dumps(error_data).encode())
+        try:
+            self.send_response(code)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+            self.end_headers()
+            
+            error_data = {"error": message, "code": code}
+            json_data = json.dumps(error_data)
+            self.wfile.write(json_data.encode('utf-8'))
+            print(f"Sent error response: {code} - {message}")
+            
+        except Exception as e:
+            print(f"Error sending error response: {e}")
 
 class HTTPAPIServer:
     def __init__(self, data_handler, host='0.0.0.0', port=8080):
@@ -93,24 +117,41 @@ class HTTPAPIServer:
         self.host = host
         self.port = port
         self.server = None
+        self.server_thread = None
     
     def start(self):
         """Start HTTP API server in separate thread"""
-        def run_server():
-            handler = lambda *args, **kwargs: DataAPIHandler(self.data_handler, *args, **kwargs)
-            self.server = HTTPServer((self.host, self.port), handler)
-            print(f"[HTTP API] Server started on http://{self.host}:{self.port}")
-            print(f"[HTTP API] Available endpoints:")
-            print(f"  - GET /api/sensor - Current sensor data")
-            print(f"  - GET /api/matrix - Current matrix data") 
-            print(f"  - GET /api/sensor/history?hours=24 - Sensor history")
-            print(f"  - GET /api/status - Server status")
-            self.server.serve_forever()
+        print(f"[HTTP API] Starting server on {self.host}:{self.port}")
         
-        server_thread = threading.Thread(target=run_server, daemon=True)
-        server_thread.start()
+        def run_server():
+            try:
+                # Create handler with data_handler bound
+                def handler_factory(*args, **kwargs):
+                    return DataAPIHandler(self.data_handler, *args, **kwargs)
+                
+                self.server = HTTPServer((self.host, self.port), handler_factory)
+                print(f"[HTTP API] ✅ Server started on http://{self.host}:{self.port}")
+                print(f"[HTTP API] Available endpoints:")
+                print(f"  - GET /api/sensor - Current sensor data")
+                print(f"  - GET /api/matrix - Current matrix data") 
+                print(f"  - GET /api/sensor/history?hours=24 - Sensor history")
+                print(f"  - GET /api/status - Server status")
+                
+                self.server.serve_forever()
+                
+            except Exception as e:
+                print(f"[HTTP API] ❌ Server error: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        self.server_thread = threading.Thread(target=run_server, daemon=True)
+        self.server_thread.start()
+        print(f"[HTTP API] Server thread started")
     
     def stop(self):
         """Stop HTTP API server"""
         if self.server:
+            print("[HTTP API] Stopping server...")
             self.server.shutdown()
+            self.server.server_close()
+            print("[HTTP API] Server stopped")
