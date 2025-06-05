@@ -1,115 +1,116 @@
 # server code
-# tcp_handler.py
-import socket
-import threading
+# http_api.py
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
-from data_handler import DataHandler
+import threading
+import time
+from urllib.parse import urlparse, parse_qs
+import os
 
-class TCPHandler:
-    def __init__(self, server):
-        self.server = server
-
-    def start_tcp_server(self):
-        """Start TCP server and listen for connections"""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
-            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_socket.bind((self.server.tcp_host, self.server.tcp_port))
-            server_socket.listen()
-            print(f"[TCP] Server started on {self.server.tcp_host}:{self.server.tcp_port}")
-
-            while True:
-                client_socket, client_address = server_socket.accept()
-                threading.Thread(
-                    target=self.handle_tcp_client,
-                    args=(client_socket, client_address),
-                    daemon=True
-                ).start()
-
-    def parse_multiple_json(self, data_str):
-        """Parse multiple JSON objects from a single string"""
-        messages = []
-        decoder = json.JSONDecoder()
-        idx = 0
+class DataAPIHandler(BaseHTTPRequestHandler):
+    def __init__(self, data_handler, *args, **kwargs):
+        print("Created HTTP_API_data handler")
+        self.data_handler = data_handler
+        super().__init__(*args, **kwargs)
+    
+    def do_GET(self):
+        """Handle GET requests for data"""
+        print("HTTP GET request")
+        parsed_path = urlparse(self.path)
+        path = parsed_path.path
+        query_params = parse_qs(parsed_path.query)
         
-        while idx < len(data_str):
-            data_str = data_str[idx:].lstrip()  # Remove leading whitespace
-            if not data_str:
-                break
-                
-            try:
-                message_obj, end_idx = decoder.raw_decode(data_str)
-                messages.append(message_obj)
-                idx += end_idx
-            except json.JSONDecodeError as e:  # ✅ Fixed: was JSONDecoderError
-                # If we can't parse more JSON, break
-                if not messages:  # If no messages parsed yet, it's a real error
-                    raise e
-                break
-                
-        return messages
-
-    def handle_tcp_client(self, client_socket, client_address):
-        """Handle individual TCP client connections"""
-        name = None        
+        # Enable CORS
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        
         try:
-            # First message is the client name
-            name = client_socket.recv(1024).decode('utf-8').strip()
-            if not name:
-                print(f"[TCP] ❌ Empty client name from {client_address}")
-                return
-
-            with self.server.tcp_lock:
-                self.server.tcp_clients[client_socket] = name
-            print(f"[TCP] ✅ {name} connected from {client_address}")
-
-            # Listen for messages
-            while True:
-                data = client_socket.recv(4096)
-                if not data:
-                    print(f"[TCP] ❌ No data from {name}, disconnecting.")
-                    break
-
-                try:
-                    message_obj = json.loads(data.decode('utf-8'))
-                    print(f"[TCP] Message from {name}: {message_obj}")
-                    
-                    # Handle ESP32_Sensor data
-                    if name == "ESP32_Sensor" and message_obj.get("type") == "sensor_data":
-                        sensor_value = message_obj.get("sensor_value", 0)
-                        threshold = message_obj.get("threshold", 500)
-                        success = self.server.data_handler.save_sensor_data(sensor_value, threshold)
-                        if success:
-                            print(f"[TCP] ✅ Sensor data saved: {sensor_value}")
-                        else:
-                            print(f"[TCP] ❌ Failed to save sensor data")
-                        
-                    # Handle ESP_Matrix data    
-                    elif name == "ESP_Matrix" and message_obj.get("type") == "matrix":
-                        matrix = message_obj.get("matrix", [])
-                        success = self.server.data_handler.save_matrix_data(matrix)
-                        if success:
-                            print(f"[TCP] ✅ Matrix data saved")
-                        else:
-                            print(f"[TCP] ❌ Failed to save matrix data")
-                    
-                    # Route other messages
-                    else:
-                        self.server.router.route(message_obj, name, sender_type="tcp")
-                        
-                except json.JSONDecodeError as e:  # ✅ Fixed: was JSONDecoderError
-                    print(f"[TCP] ❌ Invalid JSON from {name}: {e}")
-                    print(f"[TCP] Raw data: {data}")
-                    
-                except Exception as e:
-                    print(f"[TCP] ❌ Error processing message from {name}: {e}")
-                    
+            if path == '/api/sensor':
+                print("api/sensor PATH")
+                data = self.data_handler.get_sensor_data()
+                print(f"Collected sensor data from file: {data}")  # ✅ Fixed: proper string formatting
+                self._send_json_response(data)
+            
+            elif path == '/api/matrix':
+                data = self.data_handler.get_matrix_data()
+                self._send_json_response(data)
+            
+            elif path == '/api/sensor/history':
+                hours = int(query_params.get('hours', [24])[0])
+                data = self.data_handler.get_sensor_history(hours)
+                self._send_json_response(data)
+            
+            elif path == '/api/status':
+                status = {
+                    "server": "running",
+                    "timestamp": time.time(),
+                    "files_exist": {
+                        "sensor": self.data_handler.sensor_file.exists(),
+                        "matrix": self.data_handler.matrix_file.exists()
+                    }
+                }
+                self._send_json_response(status)
+            
+            else:
+                self._send_error_response(404, "Endpoint not found")
+        
         except Exception as e:
-            print(f"[TCP] ❌ Error with {name or client_address}: {e}")
-        finally:
-            with self.server.tcp_lock:
-                self.server.tcp_clients.pop(client_socket, None)
-            try:
-                client_socket.close()
-            except:
-                pass
-            print(f"[TCP] {name or client_address} disconnected")
+            print(f"[HTTP API] Error: {e}")
+            self._send_error_response(500, f"Server error: {str(e)}")
+    
+    def do_OPTIONS(self):
+        """Handle CORS preflight requests"""
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+    
+    def _send_json_response(self, data):
+        """Send JSON response"""
+        print(f"Sending to client: {data}")  # ✅ Fixed: proper string formatting
+        if data is None:
+            self._send_error_response(404, "Data not found")
+            return
+        
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+    
+    def _send_error_response(self, code, message):
+        """Send error response"""
+        self.send_response(code)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        error_data = {"error": message, "code": code}
+        self.wfile.write(json.dumps(error_data).encode())
+
+class HTTPAPIServer:
+    def __init__(self, data_handler, host='0.0.0.0', port=8080):
+        self.data_handler = data_handler
+        self.host = host
+        self.port = port
+        self.server = None
+    
+    def start(self):
+        """Start HTTP API server in separate thread"""
+        def run_server():
+            handler = lambda *args, **kwargs: DataAPIHandler(self.data_handler, *args, **kwargs)
+            self.server = HTTPServer((self.host, self.port), handler)
+            print(f"[HTTP API] Server started on http://{self.host}:{self.port}")
+            print(f"[HTTP API] Available endpoints:")
+            print(f"  - GET /api/sensor - Current sensor data")
+            print(f"  - GET /api/matrix - Current matrix data") 
+            print(f"  - GET /api/sensor/history?hours=24 - Sensor history")
+            print(f"  - GET /api/status - Server status")
+            self.server.serve_forever()
+        
+        server_thread = threading.Thread(target=run_server, daemon=True)
+        server_thread.start()
+    
+    def stop(self):
+        """Stop HTTP API server"""
+        if self.server:
+            self.server.shutdown()
