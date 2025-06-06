@@ -179,3 +179,7 @@ if __name__ == "__main__":
         stop_all()
         GPIO.cleanup()
         print("GPIO cleanup done.")
+{
+  "MM_PER_SECOND_CALIBRATION": 21.205838275937857,
+  "DEGREES_PER_SECOND_CALIBRATION": 143.8565585853301
+}
