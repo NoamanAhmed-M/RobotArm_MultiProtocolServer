@@ -1,0 +1,9 @@
+Exception in Tkinter callback
+Traceback (most recent call last):
+  File "/usr/lib/python3.6/tkinter/__init__.py", line 1705, in __call__
+    return self.func(*args)
+  File "braccio.py", line 119, in on_slider_change
+    self.position_value_label.config(text=f"Posizione: {pos} µs")
+  File "/usr/lib/python3.6/tkinter/__init__.py", line 2101, in __getattr__
+    return getattr(self.tk, attr)
+AttributeError: '_tkinter.tkapp' object has no attribute 'position_value_label'
