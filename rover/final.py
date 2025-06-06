@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 import Jetson.GPIO as GPIO
 import time
-import json
-import os
 
 # === Pin Definitions ===
 IN1 = 7
@@ -16,62 +14,11 @@ ENB = 18
 PWM_LEFT_RATIO = 0.32
 PWM_RIGHT_RATIO = 1.0
 
-# === Calibration File ===
-CALIBRATION_FILE = "calibration.json"
-
-# === Load/Save Calibration ===
-def load_calibration():
-    if os.path.exists(CALIBRATION_FILE):
-        with open(CALIBRATION_FILE, "r") as f:
-            return json.load(f)
-    else:
-        # Default values (can be tuned manually)
-        return {
-            "MM_PER_SECOND_CALIBRATION": 21.205838275937857,
-            "DEGREES_PER_SECOND_CALIBRATION": 143.8565585853301
-        }
-
-def save_calibration(data):
-    with open(CALIBRATION_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-        print(f"\nSaved calibration to {CALIBRATION_FILE}")
-
-# === Load calibration values ===
-calibration = load_calibration()
-MM_PER_SECOND_CALIBRATION = calibration["MM_PER_SECOND_CALIBRATION"]
-DEGREES_PER_SECOND_CALIBRATION = calibration["DEGREES_PER_SECOND_CALIBRATION"]
-
 # === GPIO Setup ===
 GPIO.setmode(GPIO.BCM)
 for pin in [IN1, IN2, ENA, IN3, IN4, ENB]:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
-
-# === PWM Generator ===
-def synchronized_pwm(pin_a, pin_b, duty_a, duty_b, frequency, duration):
-    period = 1.0 / frequency
-    on_time_a = period * duty_a
-    on_time_b = period * duty_b
-    end_time = time.time() + duration
-
-    while time.time() < end_time:
-        if duty_a > 0:
-            GPIO.output(pin_a, GPIO.HIGH)
-        if duty_b > 0:
-            GPIO.output(pin_b, GPIO.HIGH)
-
-        time.sleep(min(on_time_a, on_time_b))
-
-        if on_time_a <= on_time_b:
-            GPIO.output(pin_a, GPIO.LOW)
-            time.sleep(on_time_b - on_time_a)
-            GPIO.output(pin_b, GPIO.LOW)
-        else:
-            GPIO.output(pin_b, GPIO.LOW)
-            time.sleep(on_time_a - on_time_b)
-            GPIO.output(pin_a, GPIO.LOW)
-
-        time.sleep(period - max(on_time_a, on_time_b))
 
 # === Motor Direction Functions ===
 def set_motor_direction_forward():
@@ -102,82 +49,52 @@ def stop_all():
     for pin in [IN1, IN2, IN3, IN4, ENA, ENB]:
         GPIO.output(pin, GPIO.LOW)
 
-# === Time Calculations ===
-def calculate_time_for_distance(distance_mm, speed=0.7):
-    return abs(distance_mm) / (MM_PER_SECOND_CALIBRATION * speed)
+# === Motor Control using ON/OFF instead of time ===
+def move(enable=1, direction="forward", speed=1.0):
+    pwm_left = GPIO.PWM(ENA, 100)
+    pwm_right = GPIO.PWM(ENB, 100)
+    pwm_left.start(0)
+    pwm_right.start(0)
 
-def calculate_time_for_angle(degrees, speed=0.6):
-    return abs(degrees) / (DEGREES_PER_SECOND_CALIBRATION * speed)
+    try:
+        if enable == 1:
+            if direction == "forward":
+                set_motor_direction_forward()
+            elif direction == "backward":
+                set_motor_direction_backward()
+            elif direction == "left":
+                set_motor_direction_turn_left()
+            elif direction == "right":
+                set_motor_direction_turn_right()
+            else:
+                stop_all()
+                return
 
-# === Movement Commands ===
-def move_forward_mm(distance_mm, speed=0.7):
-    duration = calculate_time_for_distance(distance_mm, speed)
-    print(f"Moving forward {distance_mm}mm (est. {duration:.2f}s)")
-    set_motor_direction_forward()
-    synchronized_pwm(ENA, ENB, speed * PWM_LEFT_RATIO, speed * PWM_RIGHT_RATIO, 100, duration)
-    stop_all()
+            pwm_left.ChangeDutyCycle(speed * 100 * PWM_LEFT_RATIO)
+            pwm_right.ChangeDutyCycle(speed * 100 * PWM_RIGHT_RATIO)
+        else:
+            stop_all()
+            pwm_left.ChangeDutyCycle(0)
+            pwm_right.ChangeDutyCycle(0)
+    except KeyboardInterrupt:
+        stop_all()
+    finally:
+        pwm_left.stop()
+        pwm_right.stop()
 
-def move_backward_mm(distance_mm, speed=0.7):
-    duration = calculate_time_for_distance(distance_mm, speed)
-    print(f"Moving backward {distance_mm}mm (est. {duration:.2f}s)")
-    set_motor_direction_backward()
-    synchronized_pwm(ENA, ENB, speed * PWM_LEFT_RATIO, speed * PWM_RIGHT_RATIO, 100, duration)
-    stop_all()
-
-def turn_right_degrees(degrees, speed=0.6):
-    duration = calculate_time_for_angle(degrees, speed)
-    print(f"Turning right {degrees}° (est. {duration:.2f}s)")
-    set_motor_direction_turn_right()
-    synchronized_pwm(ENA, ENB, speed, speed, 100, duration)
-    stop_all()
-
-def turn_left_degrees(degrees, speed=0.6):
-    duration = calculate_time_for_angle(degrees, speed)
-    print(f"Turning left {degrees}° (est. {duration:.2f}s)")
-    set_motor_direction_turn_left()
-    synchronized_pwm(ENA, ENB, speed, speed, 100, duration)
-    stop_all()
-
-# === Calibration ===
-def calibrate_distance():
-    print("=== Distance Calibration ===")
-    print("1. Mark 500 mm on the floor.")
-    input("2. Press Enter to begin moving...")
-    start_time = time.time()
-    move_forward_mm(500)
-    elapsed = time.time() - start_time
-    print(f"\nTime taken: {elapsed:.2f} sec")
-    actual_mm = float(input("Enter actual distance traveled in mm: "))
-    new_cal = actual_mm / elapsed
-    calibration["MM_PER_SECOND_CALIBRATION"] = new_cal
-    save_calibration(calibration)
-    print(f"New MM_PER_SECOND_CALIBRATION = {new_cal:.2f}")
-
-def calibrate_rotation():
-    print("=== Rotation Calibration ===")
-    input("Place robot forward, press Enter to rotate 360°...")
-    start_time = time.time()
-    turn_right_degrees(360)
-    elapsed = time.time() - start_time
-    print(f"\nTime taken: {elapsed:.2f} sec")
-    actual_deg = float(input("Enter actual rotation in degrees: "))
-    new_cal = actual_deg / elapsed
-    calibration["DEGREES_PER_SECOND_CALIBRATION"] = new_cal
-    save_calibration(calibration)
-    print(f"New DEGREES_PER_SECOND_CALIBRATION = {new_cal:.2f}")
-
-# === Main Program ===
+# === Main Usage Example ===
 if __name__ == "__main__":
     try:
-        print("=== Jetson Nano Robot Controller ===")
-        print(f"Distance Calibration: {MM_PER_SECOND_CALIBRATION:.2f} mm/s")
-        print(f"Rotation Calibration: {DEGREES_PER_SECOND_CALIBRATION:.2f} deg/s")
-        print(f"PWM Ratios: Left={PWM_LEFT_RATIO}, Right={PWM_RIGHT_RATIO}")
-        
-        # Run calibrations
-        calibrate_distance()
-        calibrate_rotation()
-        
+        print("Move forward for 2 seconds...")
+        move(1, direction="forward", speed=0.8)
+        time.sleep(2)
+        move(0)
+
+        print("Turn left for 1 second...")
+        move(1, direction="left", speed=0.7)
+        time.sleep(1)
+        move(0)
+
     except KeyboardInterrupt:
         print("\n[Interrupted by user]")
     finally:
