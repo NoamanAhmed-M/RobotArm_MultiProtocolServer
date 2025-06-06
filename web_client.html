@@ -79,6 +79,12 @@
       transform: scale(1.05);
     }
 
+    .controls button:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+      transform: none;
+    }
+
     .status {
       margin-top: 16px;
       padding: 10px;
@@ -165,6 +171,31 @@
     .api-status.error {
       background: #ffebee;
       border-left-color: #f44336;
+    }
+
+    .connection-status {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .connection-item {
+      background: white;
+      padding: 10px;
+      border-radius: 6px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      border-left: 4px solid #ccc;
+    }
+
+    .connection-item.connected {
+      border-left-color: #4caf50;
+      background: #f8fff8;
+    }
+
+    .connection-item.error {
+      border-left-color: #f44336;
+      background: #fff8f8;
     }
 
     table {
@@ -281,13 +312,29 @@
 
     <div class="controls">
       <button id="connectBtn">Connect to Stream</button>
-      <button onclick="sendCommand(true)">Turn ON</button>
-      <button onclick="sendCommand(false)">Turn OFF</button>
+      <button id="turnOnBtn" onclick="sendCommand(true)">Turn ON</button>
+      <button id="turnOffBtn" onclick="sendCommand(false)">Turn OFF</button>
       <button onclick="testAPI()">Test API Connection</button>
+      <button onclick="reconnectChat()">Reconnect Chat</button>
+    </div>
+
+    <!-- Connection Status Grid -->
+    <div class="connection-status">
+      <div class="connection-item" id="videoConnectionStatus">
+        <div><strong>Video Stream:</strong></div>
+        <div id="videoStatus">Disconnected</div>
+      </div>
+      <div class="connection-item" id="chatConnectionStatus">
+        <div><strong>Chat WebSocket:</strong></div>
+        <div id="chatStatus">Disconnected</div>
+      </div>
+      <div class="connection-item" id="httpConnectionStatus">
+        <div><strong>HTTP API:</strong></div>
+        <div id="httpStatus">Not tested</div>
+      </div>
     </div>
 
     <div class="stats">
-      <div><strong>Status:</strong> <span id="connectionStatus">Disconnected</span></div>
       <div><strong>Server:</strong> <span id="serverInfo">Not connected</span></div>
       <div><strong>Last frame:</strong> <span id="lastFrameTime">Never</span></div>
     </div>
@@ -333,7 +380,7 @@
 
   <script>
     // ⚠️ CHANGE THIS TO YOUR RASPBERRY PI'S IP ADDRESS
-    const SERVER_IP = "172.20.10.5";  // Update this to your Pi's actual IP
+    const SERVER_IP = "10.65.102.103";  // Update this to your Pi's actual IP
     const VIDEO_WS_PORT = 8766;
     const CHAT_WS_PORT = 8765;
     const HTTP_API_PORT = 8080;
@@ -345,12 +392,21 @@
     const videoCanvas = document.getElementById("videoCanvas");
     const ctx = videoCanvas.getContext("2d");
     const connectBtn = document.getElementById("connectBtn");
+    const turnOnBtn = document.getElementById("turnOnBtn");
+    const turnOffBtn = document.getElementById("turnOffBtn");
     const lastFrameTimeSpan = document.getElementById("lastFrameTime");
-    const connectionStatusSpan = document.getElementById("connectionStatus");
     const serverInfoSpan = document.getElementById("serverInfo");
     const statusDiv = document.getElementById("status");
     const messageLogDiv = document.getElementById("messageLog");
     const matrixContainer = document.getElementById("matrixContainer");
+
+    // Status elements
+    const videoStatus = document.getElementById("videoStatus");
+    const chatStatus = document.getElementById("chatStatus");
+    const httpStatus = document.getElementById("httpStatus");
+    const videoConnectionStatus = document.getElementById("videoConnectionStatus");
+    const chatConnectionStatus = document.getElementById("chatConnectionStatus");
+    const httpConnectionStatus = document.getElementById("httpConnectionStatus");
 
     // API Status elements
     const apiStatusDiv = document.getElementById("apiStatus");
@@ -364,8 +420,11 @@
 
     let videoWS = null;
     let chatWS = null;
-    let isConnected = false;
+    let isVideoConnected = false;
+    let isChatConnected = false;
     let pollingInterval = null;
+    let chatReconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 5;
 
     function toggleLog() {
       const arrow = document.getElementById("logArrow");
@@ -389,9 +448,38 @@
       }
     }
 
+    function updateConnectionStatus() {
+      // Update button states
+      turnOnBtn.disabled = !isChatConnected;
+      turnOffBtn.disabled = !isChatConnected;
+
+      // Update video status
+      videoStatus.textContent = isVideoConnected ? "Connected" : "Disconnected";
+      videoConnectionStatus.className = isVideoConnected ? "connection-item connected" : "connection-item error";
+
+      // Update chat status
+      chatStatus.textContent = isChatConnected ? "Connected" : "Disconnected";
+      chatConnectionStatus.className = isChatConnected ? "connection-item connected" : "connection-item error";
+
+      // Update main status
+      if (isVideoConnected && isChatConnected) {
+        statusDiv.textContent = "All connections active";
+        statusDiv.className = "status connected";
+      } else if (isVideoConnected || isChatConnected) {
+        statusDiv.textContent = "Partially connected";
+        statusDiv.className = "status";
+      } else {
+        statusDiv.textContent = "Not connected";
+        statusDiv.className = "status error";
+      }
+    }
+
     function updateAPIStatus(success, message) {
       apiStatusText.textContent = message;
       apiStatusDiv.className = success ? "api-status success" : "api-status error";
+      
+      httpStatus.textContent = success ? "Connected" : "Error";
+      httpConnectionStatus.className = success ? "connection-item connected" : "connection-item error";
     }
 
     function drawNoSignal() {
@@ -428,7 +516,7 @@
             'Accept': 'application/json',
           },
         });
-        
+
         if (response.ok) {
           const data = await response.json();
           updateAPIStatus(true, `API Connected - Server running since ${new Date(data.timestamp * 1000).toLocaleTimeString()}`);
@@ -452,7 +540,7 @@
             'Accept': 'application/json',
           },
         });
-        
+
         if (response.ok) {
           const data = await response.json();
           updateSensorDisplay(data);
@@ -476,7 +564,7 @@
             'Accept': 'application/json',
           },
         });
-        
+
         if (response.ok) {
           const data = await response.json();
           if (data && data.matrix) {
@@ -495,7 +583,7 @@
     function startDataPolling() {
       // Test API first
       testAPI();
-      
+
       // Initial fetch after a delay
       setTimeout(() => {
         fetchSensorData();
@@ -506,7 +594,7 @@
       if (pollingInterval) {
         clearInterval(pollingInterval);
       }
-      
+
       pollingInterval = setInterval(() => {
         fetchSensorData();
         fetchMatrixData();
@@ -516,7 +604,7 @@
     }
 
     function connectToVideo() {
-      if (isConnected) {
+      if (isVideoConnected) {
         videoWS.close();
         return;
       }
@@ -525,13 +613,12 @@
       videoWS = new WebSocket(`ws://${SERVER_IP}:${VIDEO_WS_PORT}`);
 
       videoWS.onopen = () => {
-        isConnected = true;
-        connectionStatusSpan.textContent = "Connected";
+        isVideoConnected = true;
         serverInfoSpan.textContent = `${SERVER_IP}:${VIDEO_WS_PORT}`;
-        statusDiv.textContent = "Connected to video stream";
-        statusDiv.className = "status connected";
         connectBtn.textContent = "Disconnect";
         videoWS.send("Web");
+        updateConnectionStatus();
+        logMessage("info", "Video WebSocket connected");
       };
 
       videoWS.onmessage = (event) => {
@@ -551,31 +638,36 @@
       };
 
       videoWS.onerror = (error) => {
-        statusDiv.className = "status error";
-        statusDiv.textContent = "Video WebSocket Error";
         logMessage("error", "Video WebSocket error: " + error);
       };
 
       videoWS.onclose = () => {
-        isConnected = false;
+        isVideoConnected = false;
         connectBtn.textContent = "Connect to Stream";
-        statusDiv.textContent = "Disconnected";
-        connectionStatusSpan.textContent = "Disconnected";
         serverInfoSpan.textContent = "Not connected";
         drawNoSignal();
+        updateConnectionStatus();
         logMessage("info", "Video WebSocket disconnected");
       };
     }
 
     function connectToChat() {
-      logMessage("info", `Connecting to chat ws://${SERVER_IP}:${CHAT_WS_PORT}`);
+      if (isChatConnected) {
+        logMessage("info", "Chat already connected");
+        return;
+      }
+
+      logMessage("info", `Connecting to chat ws://${SERVER_IP}:${CHAT_WS_PORT} (attempt ${chatReconnectAttempts + 1})`);
       chatWS = new WebSocket(`ws://${SERVER_IP}:${CHAT_WS_PORT}`);
-      
+
       chatWS.onopen = () => {
+        isChatConnected = true;
+        chatReconnectAttempts = 0;
         chatWS.send("Web");
+        updateConnectionStatus();
         logMessage("info", "Chat WebSocket connected and identified as Web");
       };
-      
+
       chatWS.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
@@ -587,23 +679,49 @@
           logMessage("error", "Failed to parse chat message: " + e.message);
         }
       };
-      
+
       chatWS.onerror = (error) => {
         logMessage("error", "Chat WebSocket error: " + error);
       };
-      
-      chatWS.onclose = () => {
-        logMessage("info", "Chat WebSocket closed");
+
+      chatWS.onclose = (event) => {
+        isChatConnected = false;
+        updateConnectionStatus();
+        logMessage("info", `Chat WebSocket closed (code: ${event.code}, reason: ${event.reason})`);
+        
+        // Auto-reconnect with backoff
+        if (chatReconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+          chatReconnectAttempts++;
+          const delay = Math.min(1000 * Math.pow(2, chatReconnectAttempts), 30000);
+          logMessage("info", `Attempting to reconnect chat in ${delay}ms...`);
+          setTimeout(connectToChat, delay);
+        } else {
+          logMessage("error", "Max chat reconnection attempts reached");
+        }
       };
+    }
+
+    function reconnectChat() {
+      if (chatWS) {
+        chatWS.close();
+      }
+      chatReconnectAttempts = 0;
+      setTimeout(connectToChat, 1000);
     }
 
     function sendCommand(state) {
       if (!chatWS || chatWS.readyState !== WebSocket.OPEN) {
-        logMessage("error", "Chat WebSocket not connected");
+        logMessage("error", "Chat WebSocket not connected - cannot send command");
+        alert("Chat WebSocket is not connected. Please wait for reconnection or click 'Reconnect Chat'.");
         return;
       }
-      chatWS.send(JSON.stringify({ type: "command", value: state }));
-      logMessage("info", `Sent ${state ? "ON" : "OFF"} command`);
+      
+      try {
+        chatWS.send(JSON.stringify({ type: "command", value: state }));
+        logMessage("info", `Sent ${state ? "ON" : "OFF"} command successfully`);
+      } catch (error) {
+        logMessage("error", `Failed to send command: ${error.message}`);
+      }
     }
 
     function displayMatrix(matrix) {
@@ -611,7 +729,7 @@
         matrixContainer.innerHTML = "Invalid matrix data";
         return;
       }
-      
+
       const table = document.createElement("table");
       matrix.forEach(row => {
         if (Array.isArray(row)) {
@@ -632,6 +750,7 @@
 
     window.addEventListener("load", () => {
       drawNoSignal();
+      updateConnectionStatus();
       connectToChat();
       startDataPolling();
     });
