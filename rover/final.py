@@ -124,7 +124,7 @@ def move_forward_mm(distance_mm, speed=MOTOR_SPEED_FORWARD):
     
     set_motor_direction_forward()
     # Adjust individual motor speeds if needed for straight movement
-    synchronized_pwm(ENA, ENB, speed * 0.4, speed * 1.0, 100, duration)
+    synchronized_pwm(ENA, ENB, speed * 0.45, speed * 1.0, 100, duration)
     stop_all()
 
 def move_backward_mm(distance_mm, speed=MOTOR_SPEED_FORWARD):
