@@ -17,11 +17,48 @@ for pin in [IN1, IN2, IN3, IN4, ENA, ENB]:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
 
-# === PWM Setup ===
-pwmA = GPIO.PWM(ENA, 100)  # Left motor (Motor A)
-pwmB = GPIO.PWM(ENB, 100)  # Right motor (Motor B)
-pwmA.start(0)
-pwmB.start(0)
+# === Software PWM Function ===
+def software_pwm(pin, duty_cycle, frequency, duration):
+    period = 1.0 / frequency
+    on_time = period * (duty_cycle / 100.0)
+    off_time = period - on_time
+    end_time = time.time() + duration
+
+    while time.time() < end_time:
+        if duty_cycle > 0:
+            GPIO.output(pin, GPIO.HIGH)
+            time.sleep(on_time)
+        if duty_cycle < 100:
+            GPIO.output(pin, GPIO.LOW)
+            time.sleep(off_time)
+
+# === Dual Software PWM Control ===
+def dual_software_pwm(pin_a, duty_a, pin_b, duty_b, frequency, duration):
+    period = 1.0 / frequency
+    on_time_a = period * (duty_a / 100.0)
+    on_time_b = period * (duty_b / 100.0)
+    off_time = period - max(on_time_a, on_time_b)
+    end_time = time.time() + duration
+
+    while time.time() < end_time:
+        if duty_a > 0:
+            GPIO.output(pin_a, GPIO.HIGH)
+        if duty_b > 0:
+            GPIO.output(pin_b, GPIO.HIGH)
+
+        time.sleep(min(on_time_a, on_time_b))
+
+        if on_time_a <= on_time_b:
+            GPIO.output(pin_a, GPIO.LOW)
+            time.sleep(on_time_b - on_time_a)
+            GPIO.output(pin_b, GPIO.LOW)
+        else:
+            GPIO.output(pin_b, GPIO.LOW)
+            time.sleep(on_time_a - on_time_b)
+            GPIO.output(pin_a, GPIO.LOW)
+
+        if off_time > 0:
+            time.sleep(off_time)
 
 # === Motor Direction Functions ===
 def set_motor_direction_forward():
@@ -49,59 +86,50 @@ def set_motor_direction_turn_left():
     GPIO.output(IN4, GPIO.HIGH)
 
 def stop_all():
-    GPIO.output(IN1, GPIO.LOW)
-    GPIO.output(IN2, GPIO.LOW)
-    GPIO.output(IN3, GPIO.LOW)
-    GPIO.output(IN4, GPIO.LOW)
-    pwmA.ChangeDutyCycle(0)
-    pwmB.ChangeDutyCycle(0)
+    for pin in [IN1, IN2, IN3, IN4, ENA, ENB]:
+        GPIO.output(pin, GPIO.LOW)
 
-# === Movement Functions with Separate Speeds ===
-def step_move(direction_fn, left_speed, right_speed, step_time=0.1):
+# === Movement Step Function Using Dual Software PWM ===
+def step_move(direction_fn, speed_left, speed_right, duration=0.1, frequency=100):
     direction_fn()
-    pwmA.ChangeDutyCycle(left_speed)
-    pwmB.ChangeDutyCycle(right_speed)
-    time.sleep(step_time)
+    dual_software_pwm(ENA, speed_left, ENB, speed_right, frequency, duration)
     stop_all()
 
-# === High-Level Step Movements ===
-def move_forward_step(left_speed=70, right_speed=70, step_time=0.1):
-    print(f"Forward: Left={left_speed}%, Right={right_speed}%")
-    step_move(set_motor_direction_forward, left_speed, right_speed, step_time)
+# === High-Level Movements ===
+def move_forward_step(speed_left=70, speed_right=70, duration=0.1):
+    print(f"Forward Step: L={speed_left}%, R={speed_right}%")
+    step_move(set_motor_direction_forward, speed_left, speed_right, duration)
 
-def move_backward_step(left_speed=70, right_speed=70, step_time=0.1):
-    print(f"Backward: Left={left_speed}%, Right={right_speed}%")
-    step_move(set_motor_direction_backward, left_speed, right_speed, step_time)
+def move_backward_step(speed_left=70, speed_right=70, duration=0.1):
+    print(f"Backward Step: L={speed_left}%, R={speed_right}%")
+    step_move(set_motor_direction_backward, speed_left, speed_right, duration)
 
-def turn_right_step(left_speed=70, right_speed=70, step_time=0.1):
-    print(f"Turn Right: Left={left_speed}%, Right={right_speed}%")
-    step_move(set_motor_direction_turn_right, left_speed, right_speed, step_time)
+def turn_right_step(speed_left=70, speed_right=70, duration=0.1):
+    print(f"Turn Right Step: L={speed_left}%, R={speed_right}%")
+    step_move(set_motor_direction_turn_right, speed_left, speed_right, duration)
 
-def turn_left_step(left_speed=70, right_speed=70, step_time=0.1):
-    print(f"Turn Left: Left={left_speed}%, Right={right_speed}%")
-    step_move(set_motor_direction_turn_left, left_speed, right_speed, step_time)
+def turn_left_step(speed_left=70, speed_right=70, duration=0.1):
+    print(f"Turn Left Step: L={speed_left}%, R={speed_right}%")
+    step_move(set_motor_direction_turn_left, speed_left, speed_right, duration)
 
 # === Demo ===
 def demo_steps():
-    move_forward_step(60, 70, 0.4)
-    time.sleep(0.3)
-    move_backward_step(70, 60, 0.4)
-    time.sleep(0.3)
-    turn_right_step(70, 70, 0.4)
-    time.sleep(0.3)
-    turn_left_step(70, 70, 0.4)
+    move_forward_step(60, 70, 0.3)
+    time.sleep(0.2)
+    move_backward_step(70, 60, 0.3)
+    time.sleep(0.2)
+    turn_right_step(70, 70, 0.3)
+    time.sleep(0.2)
+    turn_left_step(70, 70, 0.3)
 
 # === Main ===
 if __name__ == "__main__":
     try:
-        print("Jetson Nano - Step Motor Control with Per-Motor Speed")
+        print("Jetson Nano - Step Control with Software PWM")
         demo_steps()
-
     except KeyboardInterrupt:
         print("\nInterrupted by user.")
     finally:
         stop_all()
-        pwmA.stop()
-        pwmB.stop()
         GPIO.cleanup()
         print("GPIO cleanup complete.")
