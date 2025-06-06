@@ -1,57 +1,87 @@
 import Jetson.GPIO as GPIO
 import time
+import os
 
-# Use BOARD numbering mode to match the physical pins on the Jetson Nano
+# ==== PWM via sysfs configuration ====
+PWM_CHIP = "0"  # pwmchip0
+PWM_LEFT_CH = "0"  # Motor A (pin 33 - GPIO13 - PWM1)
+PWM_RIGHT_CH = "1" # Motor B (pin 32 - GPIO12 - PWM0)
+
+PWM_LEFT_PATH = f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_LEFT_CH}"
+PWM_RIGHT_PATH = f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_RIGHT_CH}"
+
+def export_pwm(channel):
+    path = f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{channel}"
+    if not os.path.exists(path):
+        with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/export", 'w') as f:
+            f.write(channel)
+        time.sleep(0.1)
+
+def set_pwm(channel, period_ns, duty_ns):
+    path = f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{channel}"
+    with open(f"{path}/period", 'w') as f:
+        f.write(str(period_ns))
+    with open(f"{path}/duty_cycle", 'w') as f:
+        f.write(str(duty_ns))
+    with open(f"{path}/enable", 'w') as f:
+        f.write("1")
+
+def stop_pwm(channel):
+    path = f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{channel}"
+    try:
+        with open(f"{path}/enable", 'w') as f:
+            f.write("0")
+        with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/unexport", 'w') as f:
+            f.write(channel)
+    except FileNotFoundError:
+        pass
+
+# ==== GPIO Motor Direction Configuration ====
 GPIO.setmode(GPIO.BOARD)
 
-# Pin assignments based on your wire colors and connections
-IN1 = 7     # Gray wire - Motor A direction 1
-IN2 = 11    # Yellow wire - Motor A direction 2
-IN3 = 13    # Blue wire - Motor B direction 1
-IN4 = 15    # Green wire - Motor B direction 2
-ENA = 33    # Purple wire - Motor A speed (PWM)
-ENB = 32    # White wire - Motor B speed (PWM)
+IN1 = 7     # Motor A dir1
+IN2 = 11    # Motor A dir2
+IN3 = 13    # Motor B dir1
+IN4 = 15    # Motor B dir2
 
-# Set all motor control pins as output and set initial state to LOW
-pins = [IN1, IN2, IN3, IN4, ENA, ENB]
+pins = [IN1, IN2, IN3, IN4]
 for pin in pins:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
 
-# Create PWM control for motor speed on ENA and ENB
-pwm_left = GPIO.PWM(ENA, 1000)   # 1 KHz frequency for Motor A
-pwm_right = GPIO.PWM(ENB, 1000)  # 1 KHz frequency for Motor B
+# ==== حركة للأمام ====
+def move_forward(duty_percent=70):
+    print(f"Moving forward at {duty_percent}% speed")
 
-pwm_left.start(0)   # Start with 0% duty cycle (stopped)
-pwm_right.start(0)
-
-# Move both motors forward
-def move_forward():
+    # الاتجاه
     GPIO.output(IN1, GPIO.HIGH)
     GPIO.output(IN2, GPIO.LOW)
     GPIO.output(IN3, GPIO.HIGH)
     GPIO.output(IN4, GPIO.LOW)
-    pwm_left.ChangeDutyCycle(70)   # Set Motor A speed
-    pwm_right.ChangeDutyCycle(70)  # Set Motor B speed
 
-# Stop all motor movement
+    # تفعيل PWM عبر sysfs
+    period_ns = 1000000  # 1ms = 1kHz
+    duty_ns = int(period_ns * (duty_percent / 100.0))
+
+    export_pwm(PWM_LEFT_CH)
+    export_pwm(PWM_RIGHT_CH)
+    set_pwm(PWM_LEFT_CH, period_ns, duty_ns)
+    set_pwm(PWM_RIGHT_CH, period_ns, duty_ns)
+
+# ==== إيقاف الحركة ====
 def stop_all():
+    print("Stopping motors")
     GPIO.output(IN1, GPIO.LOW)
     GPIO.output(IN2, GPIO.LOW)
     GPIO.output(IN3, GPIO.LOW)
     GPIO.output(IN4, GPIO.LOW)
-    pwm_left.ChangeDutyCycle(0)
-    pwm_right.ChangeDutyCycle(0)
+    stop_pwm(PWM_LEFT_CH)
+    stop_pwm(PWM_RIGHT_CH)
 
-# Run a quick test to move forward for 2 seconds
+# ==== تجربة التشغيل ====
 try:
-    print("Moving forward")
-    move_forward()
+    move_forward(70)  # سرعة 70%
     time.sleep(2)
-    print("Stopping")
     stop_all()
 finally:
-    # Stop PWM and clean up GPIO configuration on exit
-    pwm_left.stop()
-    pwm_right.stop()
     GPIO.cleanup()
