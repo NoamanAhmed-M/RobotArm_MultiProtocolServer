@@ -1,261 +1,217 @@
 #!/usr/bin/env python3
 import Jetson.GPIO as GPIO
 import time
-
-# IMPORTANT: Only pins 32 and 33 support hardware PWM on Jetson Nano
-# Pin 32 = BCM 12 (ENA for Motor A)
-# Pin 33 = BCM 13 (ENB for Motor B)
+import math
 
 # === Pin Definitions ===
 # Motor A
 IN1 = 7    # Pin 21
 IN2 = 11   # Pin 22
-ENA = 12   # Pin 32 (Hardware PWM supported) - BCM 12
+ENA = 13   # Pin 32
 
 # Motor B
 IN3 = 27   # Pin 23
 IN4 = 16   # Pin 24
-ENB = 13   # Pin 33 (Hardware PWM supported) - BCM 13
+ENB = 18   # Pin 33
 
-# === Alternative: Software PWM Implementation ===
-# If you can't change wiring, use this section instead:
-USE_SOFTWARE_PWM = False  # Set to True if you can't rewire
+# === Calibration Constants ===
+WHEEL_DIAMETER_MM = 65.0
+WHEEL_BASE_MM = 150.0
+MOTOR_SPEED_FORWARD = 0.7
+MOTOR_SPEED_TURN = 0.6
 
-if USE_SOFTWARE_PWM:
-    # Keep your original pin assignments
-    ENA = 13   # Pin 32
-    ENB = 18   # Pin 33 (will use software PWM)
+# Motion calibration factors (tune based on testing)
+MM_PER_SECOND_CALIBRATION = 85.0
+DEGREES_PER_SECOND_CALIBRATION = 120.0
+
+# === PWM Balance Tuning Constants ===
+# These are used to fine-tune straightness
+PWM_LEFT_RATIO = 0.45    # For ENA (Motor A)
+PWM_RIGHT_RATIO = 1.0    # For ENB (Motor B)
 
 # === GPIO Setup ===
 GPIO.setmode(GPIO.BCM)
-GPIO.setwarnings(False)  # Suppress warnings
-
 for pin in [IN1, IN2, ENA, IN3, IN4, ENB]:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
 
-# Initialize PWM based on mode
-if USE_SOFTWARE_PWM:
-    # Software PWM implementation (fallback)
-    pwm_a = None
-    pwm_b = None
-    print("Using software PWM implementation")
-else:
-    # Hardware PWM (recommended)
-    try:
-        pwm_a = GPIO.PWM(ENA, 1000)  # 1kHz frequency
-        pwm_b = GPIO.PWM(ENB, 1000)  # 1kHz frequency
-        pwm_a.start(0)  # Start with 0% duty cycle
-        pwm_b.start(0)
-        print("Using hardware PWM on pins 32 and 33")
-    except ValueError as e:
-        print(f"Hardware PWM failed: {e}")
-        print("Falling back to software PWM")
-        USE_SOFTWARE_PWM = True
-        pwm_a = None
-        pwm_b = None
-
-# === Motor Control Functions ===
-def set_motor_direction(motor, direction):
-    """Set motor direction: 'forward', 'backward', or 'stop'"""
-    if motor == 'A':
-        if direction == 'forward':
-            GPIO.output(IN1, GPIO.HIGH)
-            GPIO.output(IN2, GPIO.LOW)
-        elif direction == 'backward':
-            GPIO.output(IN1, GPIO.LOW)
-            GPIO.output(IN2, GPIO.HIGH)
-        else:  # stop
-            GPIO.output(IN1, GPIO.LOW)
-            GPIO.output(IN2, GPIO.LOW)
-    elif motor == 'B':
-        if direction == 'forward':
-            GPIO.output(IN3, GPIO.HIGH)
-            GPIO.output(IN4, GPIO.LOW)
-        elif direction == 'backward':
-            GPIO.output(IN3, GPIO.HIGH)
-            GPIO.output(IN4, GPIO.LOW)
-        else:  # stop
-            GPIO.output(IN3, GPIO.LOW)
-            GPIO.output(IN4, GPIO.LOW)
-
-def set_motor_speed(motor, speed):
-    """Set motor speed (0-100)"""
-    speed = max(0, min(100, speed))  # Clamp between 0-100
+# === Custom Dual PWM Function ===
+def synchronized_pwm(pin_a, pin_b, duty_a, duty_b, frequency, duration):
+    period = 1.0 / frequency
+    on_time_a = period * duty_a
+    on_time_b = period * duty_b
+    end_time = time.time() + duration
     
-    if USE_SOFTWARE_PWM:
-        # Software PWM implementation
-        if motor == 'A':
-            if speed == 0:
-                GPIO.output(ENA, GPIO.LOW)
-            else:
-                # Simple software PWM - not as smooth as hardware PWM
-                GPIO.output(ENA, GPIO.HIGH)
-        elif motor == 'B':
-            if speed == 0:
-                GPIO.output(ENB, GPIO.LOW)
-            else:
-                GPIO.output(ENB, GPIO.HIGH)
-    else:
-        # Hardware PWM implementation
-        if motor == 'A' and pwm_a:
-            pwm_a.ChangeDutyCycle(speed)
-        elif motor == 'B' and pwm_b:
-            pwm_b.ChangeDutyCycle(speed)
+    while time.time() < end_time:
+        if duty_a > 0:
+            GPIO.output(pin_a, GPIO.HIGH)
+        if duty_b > 0:
+            GPIO.output(pin_b, GPIO.HIGH)
+        
+        time.sleep(min(on_time_a, on_time_b))
+        
+        if on_time_a <= on_time_b:
+            GPIO.output(pin_a, GPIO.LOW)
+            time.sleep(on_time_b - on_time_a)
+            GPIO.output(pin_b, GPIO.LOW)
+        else:
+            GPIO.output(pin_b, GPIO.LOW)
+            time.sleep(on_time_a - on_time_b)
+            GPIO.output(pin_a, GPIO.LOW)
+        
+        off_time = period - max(on_time_a, on_time_b)
+        if off_time > 0:
+            time.sleep(off_time)
 
-def motors_forward(speed_a, speed_b, duration):
-    """Move both motors forward with individual speed control"""
-    print(f"Moving forward - Motor A: {speed_a*100}%, Motor B: {speed_b*100}%")
-    set_motor_direction('A', 'forward')
-    set_motor_direction('B', 'forward')
-    set_motor_speed('A', speed_a * 100)
-    set_motor_speed('B', speed_b * 100)
-    time.sleep(duration)
+# === Low-level Motor Control ===
+def set_motor_direction_forward():
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.HIGH)
 
-def motors_backward(speed_a, speed_b, duration):
-    """Move both motors backward with individual speed control"""
-    print(f"Moving backward - Motor A: {speed_a*100}%, Motor B: {speed_b*100}%")
-    set_motor_direction('A', 'backward')
-    set_motor_direction('B', 'backward')
-    set_motor_speed('A', speed_a * 100)
-    set_motor_speed('B', speed_b * 100)
-    time.sleep(duration)
+def set_motor_direction_backward():
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.HIGH)
+    GPIO.output(IN3, GPIO.HIGH)
+    GPIO.output(IN4, GPIO.LOW)
 
-def turn_left(speed_a, speed_b, duration):
-    """Turn left by moving motors in opposite directions"""
-    print(f"Turning left - Motor A: backward {speed_a*100}%, Motor B: forward {speed_b*100}%")
-    set_motor_direction('A', 'backward')
-    set_motor_direction('B', 'forward')
-    set_motor_speed('A', speed_a * 100)
-    set_motor_speed('B', speed_b * 100)
-    time.sleep(duration)
+def set_motor_direction_turn_right():
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.HIGH)
+    GPIO.output(IN4, GPIO.LOW)
 
-def turn_right(speed_a, speed_b, duration):
-    """Turn right by moving motors in opposite directions"""
-    print(f"Turning right - Motor A: forward {speed_a*100}%, Motor B: backward {speed_b*100}%")
-    set_motor_direction('A', 'forward')
-    set_motor_direction('B', 'backward')
-    set_motor_speed('A', speed_a * 100)
-    set_motor_speed('B', speed_b * 100)
-    time.sleep(duration)
+def set_motor_direction_turn_left():
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.HIGH)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.HIGH)
 
 def stop_all():
-    """Stop both motors"""
-    print("Stopping all motors")
-    set_motor_direction('A', 'stop')
-    set_motor_direction('B', 'stop')
-    set_motor_speed('A', 0)
-    set_motor_speed('B', 0)
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.LOW)
+    GPIO.output(ENA, GPIO.LOW)
+    GPIO.output(ENB, GPIO.LOW)
 
-def cleanup():
-    """Clean up GPIO resources"""
-    stop_all()
-    if not USE_SOFTWARE_PWM and pwm_a and pwm_b:
-        pwm_a.stop()
-        pwm_b.stop()
-    GPIO.cleanup()
-    print("GPIO cleanup complete.")
+# === Motion Time Calculations ===
+def calculate_time_for_distance(distance_mm, speed=MOTOR_SPEED_FORWARD):
+    speed_mm_per_sec = MM_PER_SECOND_CALIBRATION * speed
+    return abs(distance_mm) / speed_mm_per_sec
 
-# === Test Functions ===
-def test_individual_motors():
-    """Test each motor individually to verify wiring"""
-    print("\n=== Testing Individual Motors ===")
-    
-    # Test Motor A Forward
-    print("Testing Motor A - Forward")
-    set_motor_direction('A', 'forward')
-    set_motor_speed('A', 50)
-    time.sleep(2)
-    stop_all()
-    time.sleep(1)
-    
-    # Test Motor A Backward
-    print("Testing Motor A - Backward")
-    set_motor_direction('A', 'backward')
-    set_motor_speed('A', 50)
-    time.sleep(2)
-    stop_all()
-    time.sleep(1)
-    
-    # Test Motor B Forward
-    print("Testing Motor B - Forward")
-    set_motor_direction('B', 'forward')
-    set_motor_speed('B', 50)
-    time.sleep(2)
-    stop_all()
-    time.sleep(1)
-    
-    # Test Motor B Backward
-    print("Testing Motor B - Backward")
-    set_motor_direction('B', 'backward')
-    set_motor_speed('B', 50)
-    time.sleep(2)
-    stop_all()
-    time.sleep(1)
+def calculate_time_for_angle(degrees, speed=MOTOR_SPEED_TURN):
+    degrees_per_sec = DEGREES_PER_SECOND_CALIBRATION * speed
+    return abs(degrees) / degrees_per_sec
 
-def test_movement_patterns():
-    """Test various movement patterns"""
-    print("\n=== Testing Movement Patterns ===")
-    
-    # Forward movement
-    print("Moving forward...")
-    motors_forward(0.5, 0.43, 3)
+# === High-level Motion ===
+def move_forward_mm(distance_mm, speed=MOTOR_SPEED_FORWARD):
+    if distance_mm <= 0:
+        print(f"Invalid distance: {distance_mm}mm. Must be positive.")
+        return
+    duration = calculate_time_for_distance(distance_mm, speed)
+    print(f"Moving forward {distance_mm}mm (estimated {duration:.2f} seconds)...")
+    set_motor_direction_forward()
+    synchronized_pwm(ENA, ENB, speed * PWM_LEFT_RATIO, speed * PWM_RIGHT_RATIO, 100, duration)
     stop_all()
-    time.sleep(1)
-    
-    # Backward movement
-    print("Moving backward...")
-    motors_backward(0.5, 0.43, 3)
-    stop_all()
-    time.sleep(1)
-    
-    # Left turn
-    print("Turning left...")
-    turn_left(0.4, 0.4, 2)
-    stop_all()
-    time.sleep(1)
-    
-    # Right turn
-    print("Turning right...")
-    turn_right(0.4, 0.4, 2)
-    stop_all()
-    time.sleep(1)
 
-# === Main Execution ===
+def move_backward_mm(distance_mm, speed=MOTOR_SPEED_FORWARD):
+    if distance_mm <= 0:
+        print(f"Invalid distance: {distance_mm}mm. Must be positive.")
+        return
+    duration = calculate_time_for_distance(distance_mm, speed)
+    print(f"Moving backward {distance_mm}mm (estimated {duration:.2f} seconds)...")
+    set_motor_direction_backward()
+    synchronized_pwm(ENA, ENB, speed * PWM_LEFT_RATIO, speed * PWM_RIGHT_RATIO, 100, duration)
+    stop_all()
+
+def turn_right_degrees(degrees, speed=MOTOR_SPEED_TURN):
+    if degrees <= 0:
+        print(f"Invalid angle: {degrees}°. Must be positive.")
+        return
+    duration = calculate_time_for_angle(degrees, speed)
+    print(f"Turning right {degrees}° (estimated {duration:.2f} seconds)...")
+    set_motor_direction_turn_right()
+    synchronized_pwm(ENA, ENB, speed, speed, 100, duration)
+    stop_all()
+
+def turn_left_degrees(degrees, speed=MOTOR_SPEED_TURN):
+    if degrees <= 0:
+        print(f"Invalid angle: {degrees}°. Must be positive.")
+        return
+    duration = calculate_time_for_angle(degrees, speed)
+    print(f"Turning left {degrees}° (estimated {duration:.2f} seconds)...")
+    set_motor_direction_turn_left()
+    synchronized_pwm(ENA, ENB, speed, speed, 100, duration)
+    stop_all()
+
+# === Calibration ===
+def calibrate_distance():
+    print("=== Distance Calibration ===")
+    print("1. Measure and mark a 500mm distance")
+    print("2. Place robot at start position")
+    input("3. Press Enter to move forward 500mm...")
+    start_time = time.time()
+    move_forward_mm(500)
+    actual_time = time.time() - start_time
+    print(f"\nRobot moved for {actual_time:.2f} seconds")
+    print(f"To update MM_PER_SECOND_CALIBRATION use: {500 / actual_time:.1f}")
+
+def calibrate_rotation():
+    print("=== Rotation Calibration ===")
+    print("1. Mark robot's starting orientation")
+    input("2. Press Enter to turn 360 degrees...")
+    start_time = time.time()
+    turn_right_degrees(360)
+    actual_time = time.time() - start_time
+    print(f"\nRobot turned for {actual_time:.2f} seconds")
+    print(f"To update DEGREES_PER_SECOND_CALIBRATION use: {360 / actual_time:.1f}")
+
+# === Demo ===
+def demo_square_pattern():
+    print("=== Demo: Square Pattern ===")
+    side_length = 200
+    for i in range(4):
+        move_forward_mm(side_length)
+        time.sleep(0.5)
+        turn_right_degrees(90)
+        time.sleep(0.5)
+    print("Square pattern complete!")
+
+def demo_movements():
+    print("=== Movement Demo ===")
+    move_forward_mm(300)
+    time.sleep(1)
+    move_backward_mm(300)
+    time.sleep(1)
+    turn_right_degrees(90)
+    time.sleep(1)
+    turn_left_degrees(180)
+    time.sleep(1)
+    turn_right_degrees(90)
+    time.sleep(1)
+    print("Demo complete!")
+
+# === Main ===
 if __name__ == "__main__":
     try:
-        print("Jetson Nano Motor Control Test")
-        print("==============================")
-        
-        # Uncomment the test you want to run:
-        
-        # Test individual motors first
-        test_individual_motors()
-        
-        # Test movement patterns
-        test_movement_patterns()
-        
-        print("\nAll tests completed successfully!")
-        
+        print("Jetson GPIO Motor Control - Degrees & Millimeters")
+        print("=" * 50)
+        print(f"Calibration Settings:")
+        print(f"  Distance: {MM_PER_SECOND_CALIBRATION} mm/sec")
+        print(f"  Rotation: {DEGREES_PER_SECOND_CALIBRATION} deg/sec")
+        print(f"  PWM Balance: Left={PWM_LEFT_RATIO}, Right={PWM_RIGHT_RATIO}")
+        print("=" * 50)
+
+        calibrate_distance()
+        calibrate_rotation()
+        # demo_movements()
+        # demo_square_pattern()
+
     except KeyboardInterrupt:
         print("\nProgram interrupted by user")
-    except Exception as e:
-        print(f"An error occurred: {e}")
     finally:
-        cleanup()
-----------------
-Traceback (most recent call last):
-  File "led.py", line 26, in <module>
-    pwm_b = GPIO.PWM(ENB, 1000)  # 1kHz frequency
-  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio.py", line 608, in __init__
-    self._ch_info = _channel_to_info(channel, need_pwm=True)
-  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio.py", line 115, in _channel_to_info
-    return _channel_to_info_lookup(channel, need_gpio, need_pwm)
-  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio.py", line 109, in _channel_to_info_lookup
-    raise ValueError("Channel %s is not a PWM" % str(channel))
-ValueError: Channel 18 is not a PWM
-Exception ignored in: <bound method PWM.__del__ of <Jetson.GPIO.gpio.PWM object at 0x7f9df810f0>>
-Traceback (most recent call last):
-  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio.py", line 640, in __del__
-    if _channel_configuration.get(self._ch_info.channel, None) != HARD_PWM:
-AttributeError: 'PWM' object has no attribute '_ch_info'
+        stop_all()
+        GPIO.cleanup()
+        print("GPIO cleanup complete.")
