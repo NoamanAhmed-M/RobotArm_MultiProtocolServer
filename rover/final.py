@@ -1,132 +1,135 @@
+#!/usr/bin/env python3
 import Jetson.GPIO as GPIO
 import time
-import os
 
-# ==== PWM setup via sysfs ====
-PWM_CHIP = "0"
-PWM_LEFT_CH = "2"   # Motor A -> Left motor (Pin 33)
-PWM_RIGHT_CH = "0"  # Motor B -> Right motor (Pin 32)
+# === Pin Definitions ===
+IN1 = 4    # Grigio -> Pin 7 (GPIO4)
+IN2 = 17   # Giallo -> Pin 11 (GPIO17)
+ENA = 13   # Viola -> Pin 33 (GPIO13)
 
-def export_pwm(channel):
-    path = f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{channel}"
-    if not os.path.exists(path):
-        try:
-            with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/export", 'w') as f:
-                f.write(channel)
-            time.sleep(0.1)
-        except OSError as e:
-            print(f"[!] Export failed for pwm{channel}: {e}")
+IN3 = 27   # Blu -> Pin 13 (GPIO27)
+IN4 = 22   # Verde -> Pin 15 (GPIO22)
+ENB = 12   # Bianco -> Pin 32 (GPIO12)
 
-# Apply PWM individually to each motor
-def set_motor_speed(left_duty=70, right_duty=70):
-    print(f"Set speeds - Left: {left_duty}%, Right: {right_duty}%")
-
-    period_ns = 1000000
-    left_duty_ns = int(period_ns * left_duty / 100)
-    right_duty_ns = int(period_ns * right_duty / 100)
-
-    export_pwm(PWM_LEFT_CH)
-    export_pwm(PWM_RIGHT_CH)
-
-    try:
-        with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_LEFT_CH}/period", 'w') as f:
-            f.write(str(period_ns))
-        with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_LEFT_CH}/duty_cycle", 'w') as f:
-            f.write(str(left_duty_ns))
-        with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_LEFT_CH}/enable", 'w') as f:
-            f.write("1")
-
-        with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_RIGHT_CH}/period", 'w') as f:
-            f.write(str(period_ns))
-        with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_RIGHT_CH}/duty_cycle", 'w') as f:
-            f.write(str(right_duty_ns))
-        with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_RIGHT_CH}/enable", 'w') as f:
-            f.write("1")
-
-    except OSError as e:
-        print(f"[!] Failed to apply PWM: {e}")
-
-def stop_pwm():
-    for channel in [PWM_LEFT_CH, PWM_RIGHT_CH]:
-        path = f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{channel}"
-        try:
-            with open(f"{path}/enable", 'w') as f:
-                f.write("0")
-            with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/unexport", 'w') as f:
-                f.write(channel)
-        except:
-            pass
-
-# ==== GPIO Setup ====
-GPIO.setmode(GPIO.BOARD)
-
-# Motor direction pins
-IN1 = 7     # Left motor (A)
-IN2 = 11
-IN3 = 13    # Right motor (B)
-IN4 = 15
-
-for pin in [IN1, IN2, IN3, IN4]:
+# === GPIO Setup ===
+GPIO.setmode(GPIO.BCM)
+for pin in [IN1, IN2, IN3, IN4, ENA, ENB]:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
 
-# ==== Movement Functions ====
+# === Software PWM Function ===
+def software_pwm(pin, duty_cycle, frequency, duration):
+    period = 1.0 / frequency
+    on_time = period * (duty_cycle / 100.0)
+    off_time = period - on_time
+    end_time = time.time() + duration
 
-def move_forward(left_duty=70, right_duty=70):
-    print("Moving forward")
+    while time.time() < end_time:
+        if duty_cycle > 0:
+            GPIO.output(pin, GPIO.HIGH)
+            time.sleep(on_time)
+        if duty_cycle < 100:
+            GPIO.output(pin, GPIO.LOW)
+            time.sleep(off_time)
+
+# === Dual Software PWM Control ===
+def dual_software_pwm(pin_a, duty_a, pin_b, duty_b, frequency, duration):
+    period = 1.0 / frequency
+    on_time_a = period * (duty_a / 100.0)
+    on_time_b = period * (duty_b / 100.0)
+    off_time = period - max(on_time_a, on_time_b)
+    end_time = time.time() + duration
+
+    while time.time() < end_time:
+        if duty_a > 0:
+            GPIO.output(pin_a, GPIO.HIGH)
+        if duty_b > 0:
+            GPIO.output(pin_b, GPIO.HIGH)
+
+        time.sleep(min(on_time_a, on_time_b))
+
+        if on_time_a <= on_time_b:
+            GPIO.output(pin_a, GPIO.LOW)
+            time.sleep(on_time_b - on_time_a)
+            GPIO.output(pin_b, GPIO.LOW)
+        else:
+            GPIO.output(pin_b, GPIO.LOW)
+            time.sleep(on_time_a - on_time_b)
+            GPIO.output(pin_a, GPIO.LOW)
+
+        if off_time > 0:
+            time.sleep(off_time)
+
+# === Motor Direction Functions ===
+def set_motor_direction_forward():
     GPIO.output(IN1, GPIO.HIGH)
     GPIO.output(IN2, GPIO.LOW)
     GPIO.output(IN3, GPIO.LOW)
     GPIO.output(IN4, GPIO.HIGH)
-    set_motor_speed(left_duty, right_duty)
 
-def move_backward(left_duty=70, right_duty=70):
-    print("Moving backward")
+def set_motor_direction_backward():
     GPIO.output(IN1, GPIO.LOW)
     GPIO.output(IN2, GPIO.HIGH)
     GPIO.output(IN3, GPIO.HIGH)
     GPIO.output(IN4, GPIO.LOW)
-    set_motor_speed(left_duty, right_duty)
 
-def turn_left(duty=70):
-    print("Turning left")
+def set_motor_direction_turn_right():
     GPIO.output(IN1, GPIO.HIGH)
     GPIO.output(IN2, GPIO.LOW)
     GPIO.output(IN3, GPIO.HIGH)
     GPIO.output(IN4, GPIO.LOW)
-    set_motor_speed(duty, 0)  # Only left motor runs
 
-def turn_right(duty=70):
-    print("Turning right")
+def set_motor_direction_turn_left():
     GPIO.output(IN1, GPIO.LOW)
     GPIO.output(IN2, GPIO.HIGH)
     GPIO.output(IN3, GPIO.LOW)
     GPIO.output(IN4, GPIO.HIGH)
-    set_motor_speed(0, duty)  # Only right motor runs
 
 def stop_all():
-    print("Stopping all motors")
-    GPIO.output(IN1, GPIO.LOW)
-    GPIO.output(IN2, GPIO.LOW)
-    GPIO.output(IN3, GPIO.LOW)
-    GPIO.output(IN4, GPIO.LOW)
-    stop_pwm()
+    for pin in [IN1, IN2, IN3, IN4, ENA, ENB]:
+        GPIO.output(pin, GPIO.LOW)
 
-# ==== Test ====
-
-try:
-    move_forward(70, 70)
-    time.sleep(2)
-
-    turn_left(60)
-    time.sleep(1)
-
-    turn_right(60)
-    time.sleep(1)
-
-    move_backward(50, 50)
-    time.sleep(2)
-
+# === Movement Step Function Using Dual Software PWM ===
+def step_move(direction_fn, speed_left, speed_right, duration=0.1, frequency=100):
+    direction_fn()
+    dual_software_pwm(ENA, speed_left, ENB, speed_right, frequency, duration)
     stop_all()
-finally:
-    GPIO.cleanup()
+
+# === High-Level Movements ===
+def move_forward_step(speed_left=70, speed_right=70, duration=0.1):
+    print(f"Forward Step: L={speed_left}%, R={speed_right}%")
+    step_move(set_motor_direction_forward, speed_left, speed_right, duration)
+
+def move_backward_step(speed_left=70, speed_right=70, duration=0.1):
+    print(f"Backward Step: L={speed_left}%, R={speed_right}%")
+    step_move(set_motor_direction_backward, speed_left, speed_right, duration)
+
+def turn_right_step(speed_left=70, speed_right=70, duration=0.1):
+    print(f"Turn Right Step: L={speed_left}%, R={speed_right}%")
+    step_move(set_motor_direction_turn_right, speed_left, speed_right, duration)
+
+def turn_left_step(speed_left=70, speed_right=70, duration=0.1):
+    print(f"Turn Left Step: L={speed_left}%, R={speed_right}%")
+    step_move(set_motor_direction_turn_left, speed_left, speed_right, duration)
+
+# === Demo ===
+def demo_steps():
+    move_forward_step(20, 50, 0.3)
+    time.sleep(0.1)
+    move_backward_step(20, 50, 0.3)
+    time.sleep(0.2)
+    turn_right_step(25, 50, 0.3)
+    time.sleep(0.2)
+    turn_left_step(25, 50, 0.3)
+
+# === Main ===
+if __name__ == "__main__":
+    try:
+        print("Jetson Nano - Step Control with Software PWM")
+        demo_steps()
+    except KeyboardInterrupt:
+        print("\nInterrupted by user.")
+    finally:
+        stop_all()
+        GPIO.cleanup()
+        print("GPIO cleanup complete.")
