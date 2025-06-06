@@ -58,14 +58,14 @@ def motors_forward(speed_a, speed_b, duration):
     GPIO.output(IN1, GPIO.HIGH)
     GPIO.output(IN2, GPIO.LOW)
     GPIO.output(IN3, GPIO.LOW)
-    GPIO.output(IN4, HIGH)
+    GPIO.output(IN4, GPIO.HIGH)
     synchronized_pwm(ENA, ENB, speed_a, speed_b, 100, duration)
 
 def motors_backward(speed_a, speed_b, duration):
     GPIO.output(IN1, GPIO.LOW)
     GPIO.output(IN2, GPIO.HIGH)
-    GPIO.output(IN3, GPIO.LOW)
-    GPIO.output(IN4, GPIO.HIGH)
+    GPIO.output(IN3, GPIO.HIGH)
+    GPIO.output(IN4, GPIO.LOW)
     synchronized_pwm(ENA, ENB, speed_a, speed_b, 100, duration)
 
 def stop_all():
@@ -79,13 +79,13 @@ def stop_all():
 # === Main Execution ===
 try:
     print("Moving forward...")
-    motors_forward(0.5, 0.43, 3)  # Adjust speed here if one motor is faster
+    motors_forward(0.4, 1, 3)  # Adjust speed here if one motor is faster
     print("Forward movement complete.")
 
     time.sleep(1)
 
     print("Moving backward...")
-    motors_backward(0.5, 0.43, 3)  # Same adjustment for backward
+    motors_backward(0.4, 1, 3)  # Same adjustment for backward
     print("Backward movement complete.")
 
     stop_all()
