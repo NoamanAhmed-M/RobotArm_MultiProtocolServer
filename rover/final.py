@@ -7,12 +7,12 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
 
 # === Pin Definitions ===
-IN1 = 4     # GPIO4
-IN2 = 17    # GPIO17
-IN3 = 27    # GPIO27
-IN4 = 22    # GPIO22
-ENA = 13    # GPIO13 (PWM-capable)
-ENB = 12    # GPIO12 (PWM-capable)
+IN1 = 217     # GPIO4
+IN2 = 50    # GPIO17
+IN3 = 14    # GPIO27
+IN4 = 194    # GPIO22
+ENA = 38    # GPIO13 (PWM-capable)
+ENB = 168    # GPIO12 (PWM-capable)
 
 # === Setup all pins as outputs ===
 for pin in [IN1, IN2, IN3, IN4, ENA, ENB]:
