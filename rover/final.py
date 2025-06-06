@@ -4,8 +4,8 @@ import os
 
 # ==== PWM setup via sysfs ====
 PWM_CHIP = "0"  # Usually pwmchip0 on Jetson Nano
-PWM_LEFT_CH = "0"   # Motor A -> typically on Pin 33 (GPIO13 -> PWM1)
-PWM_RIGHT_CH = "1"  # Motor B -> typically on Pin 32 (GPIO12 -> PWM0)
+PWM_LEFT_CH = "2"   # Motor A -> typically on Pin 33 (GPIO13 -> PWM1)
+PWM_RIGHT_CH = "0"  # Motor B -> typically on Pin 32 (GPIO12 -> PWM0)
 
 # Export the PWM channel if it's not already exported
 def export_pwm(channel):
@@ -71,8 +71,8 @@ def move_forward(duty=70):
     print("Moving forward")
     GPIO.output(IN1, GPIO.HIGH)
     GPIO.output(IN2, GPIO.LOW)
-    GPIO.output(IN3, GPIO.HIGH)
-    GPIO.output(IN4, GPIO.LOW)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.HIGH)
     apply_pwm(duty)
 
 # Stop all motor movement and disable PWM
