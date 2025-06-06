@@ -236,6 +236,7 @@ def demo_movements():
     print("Demo complete!")
 
 # === Main Execution ===
+# === Main Execution ===
 if __name__ == "__main__":
     try:
         print("Jetson GPIO Motor Control - Degrees & Millimeters")
@@ -246,7 +247,7 @@ if __name__ == "__main__":
         print("=" * 50)
         
         # Uncomment the demo you want to run:
-        demo_movements()
+        # demo_movements()
         # demo_square_pattern()
         
         # Or run individual commands:
@@ -256,8 +257,8 @@ if __name__ == "__main__":
         # turn_left_degrees(90)
         
         # Uncomment to run calibration:
-        # calibrate_distance()
-        # calibrate_rotation()
+        calibrate_distance()
+        calibrate_rotation()
         
     except KeyboardInterrupt:
         print("\nProgram interrupted by user")
@@ -265,3 +266,4 @@ if __name__ == "__main__":
         stop_all()
         GPIO.cleanup()
         print("GPIO cleanup complete.")
+
