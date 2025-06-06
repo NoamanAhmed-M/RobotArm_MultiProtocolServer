@@ -1,10 +1,11 @@
-# main.py (A* version with visualization)
+# main.py (A* version with non-blocking movement + visualization)
 import cv2
 import numpy as np
+import heapq
+from collections import deque
 from yolo_detection import detect_objects
 from realsense_processing import get_aligned_frames, stop_pipeline, get_center_depth
 from movement import execute_path, cleanup
-import heapq
 
 # A* Pathfinding Utilities
 class Node:
@@ -67,6 +68,10 @@ def map_object_to_grid(cx, cy, frame_width, frame_height, grid_size=20):
     gy = grid_size // 2 + dy
     return min(max(gx, 0), grid_size - 1), min(max(gy, 0), grid_size - 1)
 
+# Movement queue for incremental execution
+movement_queue = deque()
+path_ready = False
+
 try:
     while True:
         depth_frame, color_frame = get_aligned_frames()
@@ -81,8 +86,8 @@ try:
             x1, y1, x2, y2 = map(int, det['box'])
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
             depth = get_center_depth(depth_frame, cx, cy)
-
             frame_h, frame_w = frame.shape[:2]
+
             if depth > 0:
                 grid_map = build_occupancy_grid(depth_frame)
                 gx, gy = map_object_to_grid(cx, cy, frame_w, frame_h)
@@ -90,7 +95,7 @@ try:
                 goal = (gx, gy)
                 path = astar(grid_map, start, goal)
 
-                # Draw path on frame
+                # Visualize path
                 for i in range(len(path)-1):
                     x1g, y1g = path[i]
                     x2g, y2g = path[i+1]
@@ -99,12 +104,21 @@ try:
                     cv2.arrowedLine(frame, pt1, pt2, (255, 0, 0), 2, tipLength=0.4)
 
                 if len(path) > 1:
-                    execute_path(path)
+                    movement_queue = deque(path)
+                    path_ready = True
 
             label = f"{det['class']} {det['conf']:.2f}"
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             cv2.putText(frame, f"{depth:.2f} m", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+        # Execute movement incrementally
+        if path_ready and len(movement_queue) > 1:
+            step_start = movement_queue.popleft()
+            step_next = movement_queue[0]
+            execute_path([step_start, step_next])
+        elif path_ready and len(movement_queue) <= 1:
+            path_ready = False
 
         cv2.imshow("YOLO + A* Path + Movement", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
