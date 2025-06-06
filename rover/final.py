@@ -3,19 +3,26 @@ import Jetson.GPIO as GPIO
 import time
 
 # === Pin Definitions ===
-IN1 = 7
-IN2 = 11
-ENA = 13
-IN3 = 27
-IN4 = 16
-ENB = 18
+# IN1 = 7
+# IN2 = 11
+# ENA = 13
+# IN3 = 27
+# IN4 = 16
+# ENB = 18
+ENA = 33  # Physical Pin 33 = GPIO13 = PWM
+ENB = 32  # Physical Pin 32 = GPIO12 = PWM
+
+IN1 = 11  # Physical Pin 11 = GPIO50
+IN2 = 13  # Physical Pin 13 = GPIO14
+IN3 = 15  # Physical Pin 15 = GPIO15
+IN4 = 16  # Physical Pin 16 = GPIO16
 
 # === PWM Balance Tuning ===
 PWM_LEFT_RATIO = 0.32
 PWM_RIGHT_RATIO = 1.0
 
 # === GPIO Setup ===
-GPIO.setmode(GPIO.BCM)
+GPIO.setmode(GPIO.BOARD)
 for pin in [IN1, IN2, ENA, IN3, IN4, ENB]:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
