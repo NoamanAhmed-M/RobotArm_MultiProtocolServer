@@ -1,4 +1,4 @@
-# main.py (A* version with non-blocking movement + visualization)
+# main.py (A* version with path invalidation on object movement)
 import cv2
 import numpy as np
 import heapq
@@ -68,9 +68,10 @@ def map_object_to_grid(cx, cy, frame_width, frame_height, grid_size=20):
     gy = grid_size // 2 + dy
     return min(max(gx, 0), grid_size - 1), min(max(gy, 0), grid_size - 1)
 
-# Movement queue for incremental execution
+# Movement queue and state tracking
 movement_queue = deque()
 path_ready = False
+last_target = None
 
 try:
     while True:
@@ -81,12 +82,23 @@ try:
         frame = np.asanyarray(color_frame.get_data())
         detections = detect_objects(frame)
 
-        if detections:
+        if not detections:
+            movement_queue.clear()
+            path_ready = False
+            last_target = None
+        else:
             det = detections[0]
             x1, y1, x2, y2 = map(int, det['box'])
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
             depth = get_center_depth(depth_frame, cx, cy)
             frame_h, frame_w = frame.shape[:2]
+
+            # Invalidate path if target moved significantly
+            target_key = (cx, cy, round(depth, 2))
+            if last_target and (abs(cx - last_target[0]) > 20 or abs(cy - last_target[1]) > 20 or abs(depth - last_target[2]) > 0.2):
+                movement_queue.clear()
+                path_ready = False
+            last_target = target_key
 
             if depth > 0:
                 grid_map = build_occupancy_grid(depth_frame)
@@ -95,7 +107,6 @@ try:
                 goal = (gx, gy)
                 path = astar(grid_map, start, goal)
 
-                # Visualize path
                 for i in range(len(path)-1):
                     x1g, y1g = path[i]
                     x2g, y2g = path[i+1]
@@ -112,7 +123,7 @@ try:
             cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             cv2.putText(frame, f"{depth:.2f} m", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
-        # Execute movement incrementally
+        # Execute one movement step per loop
         if path_ready and len(movement_queue) > 1:
             step_start = movement_queue.popleft()
             step_next = movement_queue[0]
