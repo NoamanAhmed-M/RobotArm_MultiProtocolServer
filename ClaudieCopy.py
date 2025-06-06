@@ -1,71 +1,129 @@
-import json
 import asyncio
+import threading
+import time
+from collections import defaultdict
+from threading import Lock
 
-class MessageRouter:
-    def __init__(self, server):
-        self.server = server
-        # ✅ Define routing rules by client name
-        self.routing_table = {
-            "ESP_Matrix": ["Web"],
-            "Web": ["RobotArm"],
-            "ESP_Boolean": ["Web", "RobotArm"],
-            "ESP32_Sensor": ["Web"],  # Add ESP32 routing
-            "RobotArm": ["Web"]
+# Import your existing modules
+from tcp_handler import TCPHandler
+from websocket_handler import WebSocketHandler
+from udp_handler import UDPHandler
+from data_handler import DataHandler
+from http_api import HTTPAPIServer
+from status_router import MessageRouter
+
+class MultiProtocolServer:
+    def __init__(self):
+        # Network configuration
+        self.tcp_host = '0.0.0.0'
+        self.tcp_port = 9999
+        self.ws_host = '0.0.0.0'
+        self.ws_port = 8765  # Chat WebSocket
+        self.video_ws_port = 8766  # Video WebSocket
+        self.udp_host = '0.0.0.0'
+        self.udp_port = 5000
+        self.http_port = 8080
+        
+        # Client management
+        self.tcp_clients = {}  # {socket: name}
+        self.ws_clients = {}   # {websocket: name}
+        self.video_ws_clients = set()  # Set of video websocket connections
+        
+        # Thread safety
+        self.tcp_lock = Lock()
+        self.ws_lock = asyncio.Lock()
+        
+        # Video streaming
+        self.frame_queue = asyncio.Queue(maxsize=10)
+        self.buffer_dict = {}
+        self.frame_count = 0
+        self.frames_processed = 0
+        self.frames_sent = 0
+        
+        # Initialize components
+        self.data_handler = DataHandler()
+        self.router = MessageRouter(self)
+        self.tcp_handler = TCPHandler(self)
+        self.ws_handler = WebSocketHandler(self)
+        self.udp_handler = UDPHandler(self)
+        self.http_server = HTTPAPIServer(self.data_handler, port=self.http_port)
+        
+        # Event loop reference for threading
+        self.loop = None
+        
+        print("[Server] ✅ MultiProtocolServer initialized")
+    
+    def start(self):
+        """Start all server components"""
+        print("[Server] 🚀 Starting MultiProtocolServer...")
+        
+        # Start HTTP API first
+        self.http_server.start()
+        
+        # Start TCP server in separate thread
+        tcp_thread = threading.Thread(target=self.tcp_handler.start_tcp_server, daemon=True)
+        tcp_thread.start()
+        print(f"[Server] ✅ TCP server started on {self.tcp_host}:{self.tcp_port}")
+        
+        # Start asyncio event loop for WebSocket and UDP
+        try:
+            asyncio.run(self._start_async_servers())
+        except KeyboardInterrupt:
+            print("\n[Server] 🛑 Shutting down...")
+        except Exception as e:
+            print(f"[Server] ❌ Fatal error: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    async def _start_async_servers(self):
+        """Start WebSocket and UDP servers in async context"""
+        self.loop = asyncio.get_running_loop()
+        
+        # Create WebSocket servers
+        chat_server = self.ws_handler.create_chat_server()
+        video_server = self.ws_handler.create_video_server(self.video_ws_port)
+        
+        print(f"[Server] ✅ Chat WebSocket server starting on {self.ws_host}:{self.ws_port}")
+        print(f"[Server] ✅ Video WebSocket server starting on {self.ws_host}:{self.video_ws_port}")
+        
+        # Start all async tasks
+        await asyncio.gather(
+            chat_server,
+            video_server,
+            self.udp_handler.udp_receiver(),
+            self.udp_handler.broadcast_frames(),
+            self._stats_reporter()
+        )
+    
+    async def _stats_reporter(self):
+        """Periodically report server statistics"""
+        while True:
+            await asyncio.sleep(30)  # Report every 30 seconds
+            
+            async with self.ws_lock:
+                tcp_count = len(self.tcp_clients)
+                ws_count = len(self.ws_clients)
+                video_count = len(self.video_ws_clients)
+            
+            print(f"[Server Stats] TCP: {tcp_count}, WS: {ws_count}, Video: {video_count}")
+            print(f"[Video Stats] Processed: {self.frames_processed}, Sent: {self.frames_sent}, Queue: {self.frame_queue.qsize()}")
+    
+    def get_client_info(self):
+        """Get information about connected clients"""
+        with self.tcp_lock:
+            tcp_clients = list(self.tcp_clients.values())
+        
+        # Note: Can't use async lock here, so this is approximate
+        ws_clients = list(self.ws_clients.values()) if hasattr(self, 'ws_clients') else []
+        
+        return {
+            "tcp_clients": tcp_clients,
+            "ws_clients": ws_clients,
+            "video_clients": len(self.video_ws_clients),
+            "total_frames_processed": self.frames_processed,
+            "total_frames_sent": self.frames_sent
         }
 
-    def route(self, message_obj, sender_name, sender_type="tcp"):
-        """
-        Route messages based on sender name using routing_table.
-        """
-        message_obj["sender"] = sender_name
-        targets = self.routing_table.get(sender_name, [])
-        print(f"[Router] Routing from '{sender_name}' → {targets}")
-
-        if not targets:
-            print(f"[Router] ❌ No routing targets for sender: {sender_name}")
-            return
-        
-        for target in targets:
-            if target == "Web":
-                self.send_to_web(message_obj)
-            else:
-                self.send_to_tcp(target, message_obj)
-
-    def send_to_web(self, message_obj):
-        try:
-            loop = self.server.loop  # Must be set in server.py
-            asyncio.run_coroutine_threadsafe(
-                self._send_to_web(message_obj),  # Fixed method name
-                loop
-            )
-        except Exception as e:
-            print(f"[Router] ❌ Failed to forward to Web clients: {e}")
-
-    async def _send_to_web(self, message_obj):  # Fixed method name (was sendto_web)
-        async with self.server.ws_lock:
-            for ws, name in list(self.server.ws_clients.items()):
-                try:
-                    await ws.send(json.dumps(message_obj))
-                    print(f"[Router] ✅ Sent to Web client: {name}")
-                except Exception as e:
-                    print(f"[Router] ❌ WebSocket send failed for {name}: {e}")
-                    self.server.ws_clients.pop(ws, None)
-                    try:
-                        await ws.close()
-                    except:
-                        pass
-
-    def send_to_tcp(self, target_name, message_obj):
-        with self.server.tcp_lock:
-            for sock, name in list(self.server.tcp_clients.items()):
-                if name == target_name:
-                    try:
-                        sock.send(json.dumps(message_obj).encode('utf-8'))
-                        print(f"[Router] ✅ Sent to TCP client: {name}")
-                    except Exception as e:
-                        print(f"[Router] ❌ TCP send failed for {name}: {e}")
-                        self.server.tcp_clients.pop(sock, None)
-                        try:
-                            sock.close()
-                        except:
-                            pass
+if __name__ == "__main__":
+    server = MultiProtocolServer()
+    server.start()
