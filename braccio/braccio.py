@@ -134,3 +134,11 @@ if _name_ == "_main_":
     print("🤖 Avvio controllo braccio robotico (TS3215)")
     controller = KeyboardRobotController()
     controller.run()
+------------------
+🤖 Avvio controllo braccio robotico (TS3215)
+Traceback (most recent call last):
+  File "braccio.py", line 136, in <module>
+    controller.run()
+  File "braccio.py", line 88, in run
+    if not self.servo.connect():
+AttributeError: 'KeyboardRobotController' object has no attribute 'servo'
