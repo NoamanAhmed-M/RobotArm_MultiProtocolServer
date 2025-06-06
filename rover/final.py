@@ -4,11 +4,8 @@ import os
 
 # ==== PWM via sysfs configuration ====
 PWM_CHIP = "0"  # pwmchip0
-PWM_LEFT_CH = "0"  # Motor A (pin 33 - GPIO13 - PWM1)
-PWM_RIGHT_CH = "1" # Motor B (pin 32 - GPIO12 - PWM0)
-
-PWM_LEFT_PATH = f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_LEFT_CH}"
-PWM_RIGHT_PATH = f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_RIGHT_CH}"
+PWM_LEFT_CH = "0"   # Motor A (pin 33 - GPIO13)
+PWM_RIGHT_CH = "1"  # Motor B (pin 32 - GPIO12)
 
 def export_pwm(channel):
     path = f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{channel}"
@@ -49,26 +46,48 @@ for pin in pins:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
 
-# ==== حركة للأمام ====
-def move_forward(duty_percent=70):
-    print(f"Moving forward at {duty_percent}% speed")
-
-    # الاتجاه
-    GPIO.output(IN1, GPIO.HIGH)
-    GPIO.output(IN2, GPIO.LOW)
-    GPIO.output(IN3, GPIO.HIGH)
-    GPIO.output(IN4, GPIO.LOW)
-
-    # تفعيل PWM عبر sysfs
+def apply_pwm(duty_percent):
     period_ns = 1000000  # 1ms = 1kHz
     duty_ns = int(period_ns * (duty_percent / 100.0))
 
     export_pwm(PWM_LEFT_CH)
     export_pwm(PWM_RIGHT_CH)
+
     set_pwm(PWM_LEFT_CH, period_ns, duty_ns)
     set_pwm(PWM_RIGHT_CH, period_ns, duty_ns)
 
-# ==== إيقاف الحركة ====
+def move_forward(duty_percent=70):
+    print(f"Moving forward at {duty_percent}% speed")
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.HIGH)
+    GPIO.output(IN4, GPIO.LOW)
+    apply_pwm(duty_percent)
+
+def move_backward(duty_percent=70):
+    print(f"Moving backward at {duty_percent}% speed")
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.HIGH)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.HIGH)
+    apply_pwm(duty_percent)
+
+def turn_left(duty_percent=70):
+    print(f"Turning left at {duty_percent}% speed")
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.HIGH)
+    GPIO.output(IN3, GPIO.HIGH)
+    GPIO.output(IN4, GPIO.LOW)
+    apply_pwm(duty_percent)
+
+def turn_right(duty_percent=70):
+    print(f"Turning right at {duty_percent}% speed")
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.HIGH)
+    apply_pwm(duty_percent)
+
 def stop_all():
     print("Stopping motors")
     GPIO.output(IN1, GPIO.LOW)
@@ -80,8 +99,18 @@ def stop_all():
 
 # ==== تجربة التشغيل ====
 try:
-    move_forward(70)  # سرعة 70%
+    move_forward(70)
     time.sleep(2)
+    
+    turn_left(60)
+    time.sleep(1)
+
+    turn_right(60)
+    time.sleep(1)
+
+    move_backward(50)
+    time.sleep(2)
+
     stop_all()
 finally:
     GPIO.cleanup()
