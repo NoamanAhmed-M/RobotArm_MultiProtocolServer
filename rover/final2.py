@@ -198,3 +198,19 @@ if __name__ == "__main__":
         print(f"An error occurred: {e}")
     finally:
         cleanup()
+----------------
+Traceback (most recent call last):
+  File "led.py", line 26, in <module>
+    pwm_b = GPIO.PWM(ENB, 1000)  # 1kHz frequency
+  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio.py", line 608, in __init__
+    self._ch_info = _channel_to_info(channel, need_pwm=True)
+  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio.py", line 115, in _channel_to_info
+    return _channel_to_info_lookup(channel, need_gpio, need_pwm)
+  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio.py", line 109, in _channel_to_info_lookup
+    raise ValueError("Channel %s is not a PWM" % str(channel))
+ValueError: Channel 18 is not a PWM
+Exception ignored in: <bound method PWM.__del__ of <Jetson.GPIO.gpio.PWM object at 0x7f9df810f0>>
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/Jetson/GPIO/gpio.py", line 640, in __del__
+    if _channel_configuration.get(self._ch_info.channel, None) != HARD_PWM:
+AttributeError: 'PWM' object has no attribute '_ch_info'
