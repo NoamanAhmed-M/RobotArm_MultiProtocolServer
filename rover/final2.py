@@ -73,8 +73,8 @@ def set_motor_direction(motor, direction):
             GPIO.output(IN3, GPIO.HIGH)
             GPIO.output(IN4, GPIO.LOW)
         elif direction == 'backward':
-            GPIO.output(IN3, GPIO.LOW)
-            GPIO.output(IN4, GPIO.HIGH)
+            GPIO.output(IN3, GPIO.HIGH)
+            GPIO.output(IN4, GPIO.LOW)
         else:  # stop
             GPIO.output(IN3, GPIO.LOW)
             GPIO.output(IN4, GPIO.LOW)
