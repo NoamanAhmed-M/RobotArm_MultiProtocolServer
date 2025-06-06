@@ -1,33 +1,41 @@
-#!/usr/bin/env python3
 import Jetson.GPIO as GPIO
 import time
 
-# === Use BCM mode ===
-GPIO.setmode(GPIO.BCM)
-GPIO.setwarnings(False)
+# Use BOARD numbering mode to match the physical pins on the Jetson Nano
+GPIO.setmode(GPIO.BOARD)
 
-# === Pin Definitions ===
-IN1 = 217     # GPIO4
-IN2 = 50    # GPIO17
-IN3 = 14    # GPIO27
-IN4 = 194    # GPIO22
-ENA = 38    # GPIO13 (PWM-capable)
-ENB = 168    # GPIO12 (PWM-capable)
+# Pin assignments based on your wire colors and connections
+IN1 = 7     # Gray wire - Motor A direction 1
+IN2 = 11    # Yellow wire - Motor A direction 2
+IN3 = 13    # Blue wire - Motor B direction 1
+IN4 = 15    # Green wire - Motor B direction 2
+ENA = 33    # Purple wire - Motor A speed (PWM)
+ENB = 32    # White wire - Motor B speed (PWM)
 
-# === Setup all pins as outputs ===
-for pin in [IN1, IN2, IN3, IN4, ENA, ENB]:
+# Set all motor control pins as output and set initial state to LOW
+pins = [IN1, IN2, IN3, IN4, ENA, ENB]
+for pin in pins:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
 
-# === Initialize PWM ===
-pwm_left = GPIO.PWM(ENA, 100)  # 100 Hz
-pwm_right = GPIO.PWM(ENB, 100)
+# Create PWM control for motor speed on ENA and ENB
+pwm_left = GPIO.PWM(ENA, 1000)   # 1 KHz frequency for Motor A
+pwm_right = GPIO.PWM(ENB, 1000)  # 1 KHz frequency for Motor B
 
-pwm_left.start(0)
+pwm_left.start(0)   # Start with 0% duty cycle (stopped)
 pwm_right.start(0)
 
-# === Motor Control Functions ===
-def stop():
+# Move both motors forward
+def move_forward():
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.HIGH)
+    GPIO.output(IN4, GPIO.LOW)
+    pwm_left.ChangeDutyCycle(70)   # Set Motor A speed
+    pwm_right.ChangeDutyCycle(70)  # Set Motor B speed
+
+# Stop all motor movement
+def stop_all():
     GPIO.output(IN1, GPIO.LOW)
     GPIO.output(IN2, GPIO.LOW)
     GPIO.output(IN3, GPIO.LOW)
@@ -35,63 +43,15 @@ def stop():
     pwm_left.ChangeDutyCycle(0)
     pwm_right.ChangeDutyCycle(0)
 
-def forward(speed=70):
-    GPIO.output(IN1, GPIO.HIGH)
-    GPIO.output(IN2, GPIO.LOW)
-    GPIO.output(IN3, GPIO.LOW)
-    GPIO.output(IN4, GPIO.HIGH)
-    pwm_left.ChangeDutyCycle(speed)
-    pwm_right.ChangeDutyCycle(speed)
-
-def backward(speed=70):
-    GPIO.output(IN1, GPIO.LOW)
-    GPIO.output(IN2, GPIO.HIGH)
-    GPIO.output(IN3, GPIO.HIGH)
-    GPIO.output(IN4, GPIO.LOW)
-    pwm_left.ChangeDutyCycle(speed)
-    pwm_right.ChangeDutyCycle(speed)
-
-def turn_left(speed=70):
-    GPIO.output(IN1, GPIO.LOW)
-    GPIO.output(IN2, GPIO.HIGH)
-    GPIO.output(IN3, GPIO.LOW)
-    GPIO.output(IN4, GPIO.HIGH)
-    pwm_left.ChangeDutyCycle(speed)
-    pwm_right.ChangeDutyCycle(speed)
-
-def turn_right(speed=70):
-    GPIO.output(IN1, GPIO.HIGH)
-    GPIO.output(IN2, GPIO.LOW)
-    GPIO.output(IN3, GPIO.HIGH)
-    GPIO.output(IN4, GPIO.LOW)
-    pwm_left.ChangeDutyCycle(speed)
-    pwm_right.ChangeDutyCycle(speed)
-
-# === Test ===
-if __name__ == "__main__":
-    try:
-        print("Moving forward")
-        forward(75)
-        time.sleep(2)
-
-        print("Turning left")
-        turn_left(75)
-        time.sleep(2)
-
-        print("Moving backward")
-        backward(60)
-        time.sleep(2)
-
-        print("Turning right")
-        turn_right(75)
-        time.sleep(2)
-
-        print("Stopping")
-        stop()
-    except KeyboardInterrupt:
-        print("Interrupted by user")
-    finally:
-        stop()
-        pwm_left.stop()
-        pwm_right.stop()
-        GPIO.cleanup()
+# Run a quick test to move forward for 2 seconds
+try:
+    print("Moving forward")
+    move_forward()
+    time.sleep(2)
+    print("Stopping")
+    stop_all()
+finally:
+    # Stop PWM and clean up GPIO configuration on exit
+    pwm_left.stop()
+    pwm_right.stop()
+    GPIO.cleanup()
