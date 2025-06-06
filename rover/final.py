@@ -2,109 +2,96 @@
 import Jetson.GPIO as GPIO
 import time
 
+# === Use BCM mode ===
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+
 # === Pin Definitions ===
-# IN1 = 7
-# IN2 = 11
-# ENA = 13
-# IN3 = 27
-# IN4 = 16
-# ENB = 18
-ENA = 33  # Physical Pin 33 = GPIO13 = PWM
-ENB = 32  # Physical Pin 32 = GPIO12 = PWM
+IN1 = 4     # GPIO4
+IN2 = 17    # GPIO17
+IN3 = 27    # GPIO27
+IN4 = 22    # GPIO22
+ENA = 13    # GPIO13 (PWM-capable)
+ENB = 12    # GPIO12 (PWM-capable)
 
-IN1 = 11  # Physical Pin 11 = GPIO50
-IN2 = 13  # Physical Pin 13 = GPIO14
-IN3 = 15  # Physical Pin 15 = GPIO15
-IN4 = 16  # Physical Pin 16 = GPIO16
-
-# === PWM Balance Tuning ===
-PWM_LEFT_RATIO = 0.32
-PWM_RIGHT_RATIO = 1.0
-
-# === GPIO Setup ===
-GPIO.setmode(GPIO.BOARD)
-for pin in [IN1, IN2, ENA, IN3, IN4, ENB]:
+# === Setup all pins as outputs ===
+for pin in [IN1, IN2, IN3, IN4, ENA, ENB]:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
 
-# === Motor Direction Functions ===
-def set_motor_direction_forward():
+# === Initialize PWM ===
+pwm_left = GPIO.PWM(ENA, 100)  # 100 Hz
+pwm_right = GPIO.PWM(ENB, 100)
+
+pwm_left.start(0)
+pwm_right.start(0)
+
+# === Motor Control Functions ===
+def stop():
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.LOW)
+    pwm_left.ChangeDutyCycle(0)
+    pwm_right.ChangeDutyCycle(0)
+
+def forward(speed=70):
     GPIO.output(IN1, GPIO.HIGH)
     GPIO.output(IN2, GPIO.LOW)
     GPIO.output(IN3, GPIO.LOW)
     GPIO.output(IN4, GPIO.HIGH)
+    pwm_left.ChangeDutyCycle(speed)
+    pwm_right.ChangeDutyCycle(speed)
 
-def set_motor_direction_backward():
+def backward(speed=70):
     GPIO.output(IN1, GPIO.LOW)
     GPIO.output(IN2, GPIO.HIGH)
     GPIO.output(IN3, GPIO.HIGH)
     GPIO.output(IN4, GPIO.LOW)
+    pwm_left.ChangeDutyCycle(speed)
+    pwm_right.ChangeDutyCycle(speed)
 
-def set_motor_direction_turn_right():
-    GPIO.output(IN1, GPIO.HIGH)
-    GPIO.output(IN2, GPIO.LOW)
-    GPIO.output(IN3, GPIO.HIGH)
-    GPIO.output(IN4, GPIO.LOW)
-
-def set_motor_direction_turn_left():
+def turn_left(speed=70):
     GPIO.output(IN1, GPIO.LOW)
     GPIO.output(IN2, GPIO.HIGH)
     GPIO.output(IN3, GPIO.LOW)
     GPIO.output(IN4, GPIO.HIGH)
+    pwm_left.ChangeDutyCycle(speed)
+    pwm_right.ChangeDutyCycle(speed)
 
-def stop_all():
-    for pin in [IN1, IN2, IN3, IN4, ENA, ENB]:
-        GPIO.output(pin, GPIO.LOW)
+def turn_right(speed=70):
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.HIGH)
+    GPIO.output(IN4, GPIO.LOW)
+    pwm_left.ChangeDutyCycle(speed)
+    pwm_right.ChangeDutyCycle(speed)
 
-# === Motor Control using ON/OFF instead of time ===
-def move(enable=1, direction="forward", speed=1.0):
-    pwm_left = GPIO.PWM(ENA, 100)
-    pwm_right = GPIO.PWM(ENB, 100)
-    pwm_left.start(0)
-    pwm_right.start(0)
-
-    try:
-        if enable == 1:
-            if direction == "forward":
-                set_motor_direction_forward()
-            elif direction == "backward":
-                set_motor_direction_backward()
-            elif direction == "left":
-                set_motor_direction_turn_left()
-            elif direction == "right":
-                set_motor_direction_turn_right()
-            else:
-                stop_all()
-                return
-
-            pwm_left.ChangeDutyCycle(speed * 100 * PWM_LEFT_RATIO)
-            pwm_right.ChangeDutyCycle(speed * 100 * PWM_RIGHT_RATIO)
-        else:
-            stop_all()
-            pwm_left.ChangeDutyCycle(0)
-            pwm_right.ChangeDutyCycle(0)
-    except KeyboardInterrupt:
-        stop_all()
-    finally:
-        pwm_left.stop()
-        pwm_right.stop()
-
-# === Main Usage Example ===
+# === Test ===
 if __name__ == "__main__":
     try:
-        print("Move forward for 2 seconds...")
-        move(1, direction="forward", speed=0.8)
+        print("Moving forward")
+        forward(75)
         time.sleep(2)
-        move(0)
 
-        print("Turn left for 1 second...")
-        move(1, direction="left", speed=0.7)
-        time.sleep(1)
-        move(0)
+        print("Turning left")
+        turn_left(75)
+        time.sleep(2)
 
+        print("Moving backward")
+        backward(60)
+        time.sleep(2)
+
+        print("Turning right")
+        turn_right(75)
+        time.sleep(2)
+
+        print("Stopping")
+        stop()
     except KeyboardInterrupt:
-        print("\n[Interrupted by user]")
+        print("Interrupted by user")
     finally:
-        stop_all()
+        stop()
+        pwm_left.stop()
+        pwm_right.stop()
         GPIO.cleanup()
-        print("GPIO cleanup done.")
