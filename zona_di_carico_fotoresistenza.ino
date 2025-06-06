@@ -4,16 +4,16 @@
 
 String clientNameIs = "Stazione di prelievo";
 
-const int fotoR = 34;
+const int fotoR = 33;
 const int soglia = 400;
 int stato;
 
 // WiFi credentials
-const char *ssid = "TP-Link_CE88";
-const char *password = "123456789";
+const char *ssid = "ITS Academy Udine Guests";
+const char *password = "!MV5rP2xka";
 
 // TCP server settings
-const char *server_ip = "192.168.1.100";
+const char *server_ip = "10.65.102.103";
 const uint16_t server_port = 5555;
 const char *client_id = "ESP32_Sensor";
 
@@ -82,8 +82,27 @@ bool connectToServer()
   if (client.connect(server_ip, server_port))
   {
     Serial.println("Connected");
-    client.println(client_id); // send client ID to server
+    
+    // Send client ID as plain text first (as expected by server)
+    client.print(client_id);
+    client.print("\n");  // Add newline to terminate the client ID
     Serial.println("[TCP] Sent client ID: " + String(client_id));
+
+    // Wait a bit for server to process client ID
+    delay(100);
+
+    // Send client identification as JSON message
+    StaticJsonDocument<200> idDoc;
+    idDoc["type"] = "client_id";
+    idDoc["client_id"] = client_id;
+    idDoc["client_name"] = clientNameIs;
+    idDoc["timestamp"] = millis();
+
+    String idJsonString;
+    serializeJson(idDoc, idJsonString);
+    client.print(idJsonString);
+    client.print("\n");  // Ensure newline termination
+    Serial.println("[TCP] Sent client ID JSON: " + idJsonString);
 
     // Wait for server acknowledgment (optional but recommended)
     unsigned long timeout = millis() + 3000; // 3 second timeout
@@ -102,10 +121,13 @@ bool connectToServer()
     doc["message"] = "ESP32_Sensor connected";
     doc["reconnect_count"] = reconnectCount;
     doc["uptime"] = millis();
+    doc["client_name"] = clientNameIs;
 
     String jsonString;
     serializeJson(doc, jsonString);
-    client.println(jsonString);
+    client.print(jsonString);
+    client.print("\n");  // Ensure newline termination
+    Serial.println("[TCP] Sent connection message: " + jsonString);
 
     isConnectedToServer = true;
     reconnectCount++;
@@ -160,7 +182,7 @@ void sendData()
   }
 
   // Create JSON message
-  StaticJsonDocument<200> doc;
+  StaticJsonDocument<300> doc;  // Increased size for safety
   doc["type"] = "sensor_data";
   doc["state"] = stato;
   doc["sensor_value"] = carico;
@@ -168,24 +190,30 @@ void sendData()
   doc["timestamp"] = millis();
   doc["message_id"] = messagesSent + 1;
   doc["client_name"] = clientNameIs;
+  doc["client_id"] = client_id;  // Add client_id for consistency
 
   // Convert to string and send
   String jsonString;
   serializeJson(doc, jsonString);
   
-  if (client.println(jsonString))
-  {
-    messagesSent++;
-    Serial.print("[TCP] Data sent: ");
-    Serial.println(jsonString);
-    Serial.print("[TCP] Sensor state: ");
-    Serial.println(stato == 1 ? "CLEAR" : "BLOCKED");
-  }
-  else
-  {
-    Serial.println("[TCP] Failed to send data");
+  // Send with proper termination
+  client.print(jsonString);
+  client.print("\n");  // Ensure newline termination
+  
+  // Check if send was successful
+  if (!client.connected()) {
+    Serial.println("[TCP] Connection lost during send");
     isConnectedToServer = false;
+    return;
   }
+  
+  messagesSent++;
+  Serial.print("[TCP] Data sent: ");
+  Serial.println(jsonString);
+  Serial.print("[TCP] Sensor state: ");
+  Serial.println(stato == 1 ? "CLEAR" : "BLOCKED");
+  Serial.print("[TCP] Messages sent: ");
+  Serial.println(messagesSent);
 }
 
 void setup()
