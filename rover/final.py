@@ -67,21 +67,6 @@ def motors_backward(speed_a, speed_b, duration):
     GPIO.output(IN3, GPIO.HIGH)
     GPIO.output(IN4, GPIO.LOW)
     synchronized_pwm(ENA, ENB, speed_a, speed_b, 100, duration)
-def turn_right(speed_a, speed_b, duration):
-    """Turn right by rotating motor A forward and motor B backward"""
-    GPIO.output(IN1, GPIO.HIGH)   # Motor A forward
-    GPIO.output(IN2, GPIO.LOW)
-    GPIO.output(IN3, GPIO.HIGH)   # Motor B backward
-    GPIO.output(IN4, GPIO.LOW)
-    synchronized_pwm(ENA, ENB, speed_a, speed_b, 100, duration)
-
-def turn_left(speed_a, speed_b, duration):
-    """Turn left by rotating motor A backward and motor B forward"""
-    GPIO.output(IN1, GPIO.LOW)    # Motor A backward
-    GPIO.output(IN2, GPIO.HIGH)
-    GPIO.output(IN3, GPIO.LOW)    # Motor B forward
-    GPIO.output(IN4, GPIO.HIGH)
-    synchronized_pwm(ENA, ENB, speed_a, speed_b, 100, duration)
 
 
 def stop_all():
