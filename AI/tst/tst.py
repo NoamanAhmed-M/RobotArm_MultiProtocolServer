@@ -1,3 +1,5 @@
+sudo usermod -a -G dialout $USER
+
 sudo gedit /etc/udev/rules.d/99-gpio.rules
 SUBSYSTEM=="gpio*", PROGRAM="/bin/sh -c 'chown -R root:gpio /sys/class/gpio/ && chmod -R 770 /sys/class/gpio/'"
 sudo udevadm control --reload-rules
