@@ -2,16 +2,29 @@
 import Jetson.GPIO as GPIO
 import time
 
+# IMPORTANT: Only pins 32 and 33 support hardware PWM on Jetson Nano
+# Pin 32 = BCM 12 (ENA for Motor A)
+# Pin 33 = BCM 13 (ENB for Motor B)
+
 # === Pin Definitions ===
 # Motor A
 IN1 = 7    # Pin 21
 IN2 = 11   # Pin 22
-ENA = 13   # Pin 32
+ENA = 12   # Pin 32 (Hardware PWM supported) - BCM 12
 
 # Motor B
 IN3 = 27   # Pin 23
 IN4 = 16   # Pin 24
-ENB = 18   # Pin 33
+ENB = 13   # Pin 33 (Hardware PWM supported) - BCM 13
+
+# === Alternative: Software PWM Implementation ===
+# If you can't change wiring, use this section instead:
+USE_SOFTWARE_PWM = False  # Set to True if you can't rewire
+
+if USE_SOFTWARE_PWM:
+    # Keep your original pin assignments
+    ENA = 13   # Pin 32
+    ENB = 18   # Pin 33 (will use software PWM)
 
 # === GPIO Setup ===
 GPIO.setmode(GPIO.BCM)
@@ -21,11 +34,26 @@ for pin in [IN1, IN2, ENA, IN3, IN4, ENB]:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
 
-# Initialize PWM objects
-pwm_a = GPIO.PWM(ENA, 1000)  # 1kHz frequency
-pwm_b = GPIO.PWM(ENB, 1000)  # 1kHz frequency
-pwm_a.start(0)  # Start with 0% duty cycle
-pwm_b.start(0)
+# Initialize PWM based on mode
+if USE_SOFTWARE_PWM:
+    # Software PWM implementation (fallback)
+    pwm_a = None
+    pwm_b = None
+    print("Using software PWM implementation")
+else:
+    # Hardware PWM (recommended)
+    try:
+        pwm_a = GPIO.PWM(ENA, 1000)  # 1kHz frequency
+        pwm_b = GPIO.PWM(ENB, 1000)  # 1kHz frequency
+        pwm_a.start(0)  # Start with 0% duty cycle
+        pwm_b.start(0)
+        print("Using hardware PWM on pins 32 and 33")
+    except ValueError as e:
+        print(f"Hardware PWM failed: {e}")
+        print("Falling back to software PWM")
+        USE_SOFTWARE_PWM = True
+        pwm_a = None
+        pwm_b = None
 
 # === Motor Control Functions ===
 def set_motor_direction(motor, direction):
@@ -54,10 +82,26 @@ def set_motor_direction(motor, direction):
 def set_motor_speed(motor, speed):
     """Set motor speed (0-100)"""
     speed = max(0, min(100, speed))  # Clamp between 0-100
-    if motor == 'A':
-        pwm_a.ChangeDutyCycle(speed)
-    elif motor == 'B':
-        pwm_b.ChangeDutyCycle(speed)
+    
+    if USE_SOFTWARE_PWM:
+        # Software PWM implementation
+        if motor == 'A':
+            if speed == 0:
+                GPIO.output(ENA, GPIO.LOW)
+            else:
+                # Simple software PWM - not as smooth as hardware PWM
+                GPIO.output(ENA, GPIO.HIGH)
+        elif motor == 'B':
+            if speed == 0:
+                GPIO.output(ENB, GPIO.LOW)
+            else:
+                GPIO.output(ENB, GPIO.HIGH)
+    else:
+        # Hardware PWM implementation
+        if motor == 'A' and pwm_a:
+            pwm_a.ChangeDutyCycle(speed)
+        elif motor == 'B' and pwm_b:
+            pwm_b.ChangeDutyCycle(speed)
 
 def motors_forward(speed_a, speed_b, duration):
     """Move both motors forward with individual speed control"""
@@ -106,8 +150,9 @@ def stop_all():
 def cleanup():
     """Clean up GPIO resources"""
     stop_all()
-    pwm_a.stop()
-    pwm_b.stop()
+    if not USE_SOFTWARE_PWM and pwm_a and pwm_b:
+        pwm_a.stop()
+        pwm_b.stop()
     GPIO.cleanup()
     print("GPIO cleanup complete.")
 
