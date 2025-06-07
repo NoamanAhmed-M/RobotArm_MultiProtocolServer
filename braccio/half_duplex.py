@@ -3,7 +3,6 @@ from tkinter import ttk
 import threading
 import time
 import serial
-import threading
 
 
 class TS3215Controller:
@@ -11,7 +10,7 @@ class TS3215Controller:
         self.port = port
         self.baudrate = baudrate
         self.ser = None
-        self.lock = threading.Lock()  # For future half-duplex read/write
+        self.lock = threading.Lock()
 
     def connect(self):
         try:
@@ -32,22 +31,20 @@ class TS3215Controller:
         t_val = int(time_ms / 20)
 
         packet = bytearray([
-            0x55, 0x55,             # Header
-            servo_id,              # Servo ID
-            7,                     # Length
-            1,                     # Command: Move
-            pos_val & 0xFF,        # Pos Low byte
-            (pos_val >> 8) & 0xFF, # Pos High byte
-            t_val & 0xFF,          # Time Low
-            (t_val >> 8) & 0xFF    # Time High
+            0x55, 0x55,
+            servo_id,
+            7,
+            1,
+            pos_val & 0xFF,
+            (pos_val >> 8) & 0xFF,
+            t_val & 0xFF,
+            (t_val >> 8) & 0xFF
         ])
 
         if self.ser and self.ser.is_open:
             with self.lock:
                 self.ser.write(packet)
-                # Optional: flush to avoid buffering
                 self.ser.flush()
-                # No read expected in current version
 
 
 class ServoGUI(tk.Tk):
@@ -67,13 +64,16 @@ class ServoGUI(tk.Tk):
         self.servo_label = ttk.Label(self, text=f"Selected Servo: {self.selected_servo}", font=("Arial", 14))
         self.servo_label.pack(pady=10)
 
-        self.position_slider = ttk.Scale(self, from_=500, to=2500, orient="horizontal",
-                                         command=self.on_slider_change)
+        self.position_slider = ttk.Scale(self, from_=500, to=2500, orient="horizontal")
         self.position_slider.set(self.positions[self.selected_servo])
         self.position_slider.pack(fill="x", padx=20)
 
+        # Now safe to create label before binding event
         self.position_value_label = ttk.Label(self, text=f"Position: {self.positions[self.selected_servo]} µs")
         self.position_value_label.pack(pady=5)
+
+        # Bind event after label is created
+        self.position_slider.bind("<ButtonRelease-1>", self.on_slider_change)
 
         btn_frame = ttk.Frame(self)
         btn_frame.pack(pady=10)
@@ -111,7 +111,7 @@ class ServoGUI(tk.Tk):
         self.position_value_label.config(text=f"Position: {pos} µs")
         self.controller.send_position(self.selected_servo, pos)
 
-    def on_slider_change(self, event):
+    def on_slider_change(self, event=None):
         pos = int(float(self.position_slider.get()))
         self.positions[self.selected_servo] = pos
         self.position_value_label.config(text=f"Position: {pos} µs")
