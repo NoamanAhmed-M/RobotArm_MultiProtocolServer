@@ -1,0 +1,85 @@
+import serial
+import time
+
+# === UART Setup ===
+try:
+    ser = serial.Serial('/dev/ttyTHS1', 115200, timeout=0.1)
+    print("[✓] Serial port opened on /dev/ttyTHS1")
+except serial.SerialException as e:
+    print(f"[✗] Could not open serial port: {e}")
+    exit(1)
+
+
+# === Move Servo ===
+def move_servo(servo_id, position, duration_ms):
+    """
+    Move servo to target position (in µs) over duration (ms).
+    Position typically between 500 and 2500.
+    """
+    pos_val = int(position * 4)
+    t_val = int(duration_ms / 20)
+
+    packet = bytearray([
+        0x55, 0x55,       # Header
+        servo_id,         # Servo ID (1~253)
+        7,                # Packet length
+        1,                # Command: Move
+        pos_val & 0xFF,
+        (pos_val >> 8) & 0xFF,
+        t_val & 0xFF,
+        (t_val >> 8) & 0xFF
+    ])
+
+    ser.write(packet)
+    ser.flush()
+    print(f"[→] Sent move command to Servo {servo_id}: pos={position}, time={duration_ms}ms")
+
+
+# === Change Servo ID ===
+def change_servo_id(current_id, new_id):
+    """
+    Change the ID of a servo from current_id to new_id.
+    """
+    packet = bytearray([
+        0x55, 0x55,
+        current_id,
+        4,      # Packet length
+        13,     # Command: Change ID
+        new_id
+    ])
+    ser.write(packet)
+    ser.flush()
+    print(f"[⚙] Changed Servo ID from {current_id} to {new_id}")
+
+
+# === Scan for Active Servo IDs ===
+def scan_servos():
+    """
+    Try moving all IDs to see which servos respond.
+    """
+    print("[🔍] Scanning servo IDs...")
+    for sid in range(1, 254):
+        print(f" - Trying Servo ID {sid}")
+        move_servo(sid, 1500, 200)
+        time.sleep(0.05)
+    print("[✓] Scan complete.")
+
+
+# === Main Test ===
+if __name__ == '__main__':
+    print("=== ST3215 Servo Controller ===")
+    time.sleep(1)
+
+    # Example Usage
+    move_servo(1, 1500, 300)   # Move to center
+    time.sleep(1)
+    move_servo(1, 1000, 300)   # Move left
+    time.sleep(1)
+    move_servo(1, 2000, 300)   # Move right
+    time.sleep(1)
+
+    # Uncomment to scan all IDs
+    # scan_servos()
+
+    # Uncomment to change ID from 1 to 5
+    # change_servo_id(1, 5)
