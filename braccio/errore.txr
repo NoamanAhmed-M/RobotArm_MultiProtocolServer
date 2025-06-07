@@ -1,9 +1,19 @@
-Exception in Tkinter callback
-Traceback (most recent call last):
-  File "/usr/lib/python3.6/tkinter/__init__.py", line 1705, in __call__
-    return self.func(*args)
-  File "braccio.py", line 119, in on_slider_change
-    self.position_value_label.config(text=f"Posizione: {pos} µs")
-  File "/usr/lib/python3.6/tkinter/__init__.py", line 2101, in __getattr__
-    return getattr(self.tk, attr)
-AttributeError: '_tkinter.tkapp' object has no attribute 'position_value_label'
+import serial
+
+ser = serial.Serial('/dev/ttyTHS1', 115200, timeout=0.1)
+
+# Send "move to 1500 µs" to servo ID 1
+pos_val = int(1500 * 4)
+t_val = int(20 / 20)
+packet = bytearray([
+    0x55, 0x55,
+    1,
+    7,
+    1,
+    pos_val & 0xFF,
+    (pos_val >> 8) & 0xFF,
+    t_val & 0xFF,
+    (t_val >> 8) & 0xFF
+])
+ser.write(packet)
+ser.flush()
