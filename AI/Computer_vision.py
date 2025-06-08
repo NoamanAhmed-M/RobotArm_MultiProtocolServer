@@ -1,71 +1,144 @@
-
-import pyrealsense2 as rs
-import numpy as np
+import sys
 import cv2
+import numpy as np
+import pyrealsense2 as rs
+import socket
+import struct
+import time
+import json
+import threading
+from motor_control import move_forward_step, turn_left_step, turn_right_step, stop_all, cleanup
 
-# Initialize RealSense pipeline
+# === Network Setup ===
+UDP_IP = '192.168.43.114'
+UDP_PORT = 5005
+MAX_DGRAM = 65000
+udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+TCP_IP = '192.168.43.114'
+TCP_PORT = 5555
+CLIENT_NAME = "RobotArm"
+RECONNECT_DELAY = 5
+should_move = threading.Event()
+
+# === RealSense Camera ===
 pipeline = rs.pipeline()
 config = rs.config()
-config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-
-# Start streaming
-pipeline.start(config)
-
-# Align depth to color
+config.enable_stream(rs.stream.depth, 424, 240, rs.format.z16, 30)
+config.enable_stream(rs.stream.color, 424, 240, rs.format.bgr8, 30)
+profile = pipeline.start(config)
 align = rs.align(rs.stream.color)
+
+def get_average_depth(depth_frame, cx, cy, k=5):
+    values = [depth_frame.get_distance(cx + dx, cy + dy)
+              for dx in range(-k//2, k//2 + 1)
+              for dy in range(-k//2, k//2 + 1)
+              if 0 <= cx + dx < depth_frame.get_width() and 0 <= cy + dy < depth_frame.get_height()]
+    values = [v for v in values if 0 < v < 5]
+    return np.mean(values) if values else 0
+
+def start_tcp_receiver():
+    def receive_commands(sock):
+        while True:
+            try:
+                data = sock.recv(4096)
+                if not data:
+                    break
+                message = json.loads(data.decode('utf-8'))
+                if message.get("type") == "command":
+                    should_move.set() if message.get("value") else should_move.clear()
+            except:
+                break
+
+    while True:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((TCP_IP, TCP_PORT))
+            sock.send((CLIENT_NAME + "\n").encode('utf-8'))
+            receive_commands(sock)
+        except:
+            time.sleep(RECONNECT_DELAY)
+
+threading.Thread(target=start_tcp_receiver, daemon=True).start()
+
+# === Main Loop ===
+frame_num = 0
+last_process_time = 0
 
 try:
     while True:
-        # Wait for frames
         frames = pipeline.wait_for_frames()
         aligned_frames = align.process(frames)
-
         depth_frame = aligned_frames.get_depth_frame()
         color_frame = aligned_frames.get_color_frame()
-
         if not depth_frame or not color_frame:
             continue
 
-        # Convert images to numpy arrays
         color_image = np.asanyarray(color_frame.get_data())
-        depth_image = np.asanyarray(depth_frame.get_data())
-
-        # Convert color image to grayscale
+        display_image = color_image.copy()
         gray = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
-
-        # Apply Gaussian blur and threshold to find white objects
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        _, thresh = cv2.threshold(blurred, 200, 255, cv2.THRESH_BINARY)
 
-        # Find contours
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        now = time.time()
+        if now - last_process_time >= 0.5:
+            last_process_time = now
 
-        for cnt in contours:
-            approx = cv2.approxPolyDP(cnt, 0.02 * cv2.arcLength(cnt, True), True)
-            area = cv2.contourArea(cnt)
+            detected = False
 
-            # Check if it's a square-like object
-            if len(approx) == 4 and area > 1000:
-                x, y, w, h = cv2.boundingRect(cnt)
-                cx, cy = x + w // 2, y + h // 2
+            # Try detecting black cylinder: dark circular area
+            circles = cv2.HoughCircles(blurred, cv2.HOUGH_GRADIENT, 1, 40,
+                                        param1=50, param2=30, minRadius=15, maxRadius=60)
+            if circles is not None:
+                for circle in circles[0, :1]:
+                    cx, cy, radius = map(int, circle)
+                    distance = get_average_depth(depth_frame, cx, cy)
+                    cv2.circle(display_image, (cx, cy), radius, (0, 0, 255), 2)
+                    if should_move.is_set() and 0.3 < distance < 2.0:
+                        w = color_image.shape[1]
+                        if cx < w // 3:
+                            turn_left_step(20, 50, 0.1)
+                        elif cx > 2 * w // 3:
+                            turn_right_step(20, 50, 0.1)
+                        else:
+                            move_forward_step(20, 50, 0.1)
+                        detected = True
+                        break
 
-                # Get depth at the center of the cube
-                distance = depth_frame.get_distance(cx, cy)
+            # If not found, try detecting white square with hole
+            if not detected:
+                _, thresh = cv2.threshold(blurred, 200, 255, cv2.THRESH_BINARY)
+                contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for cnt in contours:
+                    approx = cv2.approxPolyDP(cnt, 0.04 * cv2.arcLength(cnt, True), True)
+                    if len(approx) == 4 and cv2.contourArea(cnt) > 1000:
+                        x, y, w, h = cv2.boundingRect(approx)
+                        cx, cy = x + w // 2, y + h // 2
+                        distance = get_average_depth(depth_frame, cx, cy)
+                        cv2.rectangle(display_image, (x, y), (x + w, y + h), (255, 0, 0), 2)
+                        if should_move.is_set() and 0.3 < distance < 2.0:
+                            img_w = color_image.shape[1]
+                            if cx < img_w // 3:
+                                turn_left_step(20, 50, 0.1)
+                            elif cx > 2 * img_w // 3:
+                                turn_right_step(20, 50, 0.1)
+                            else:
+                                move_forward_step(20, 50, 0.1)
+                            break
 
-                # Draw rectangle and distance text
-                cv2.rectangle(color_image, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                cv2.putText(color_image, f"{distance:.2f} m", (x, y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        # UDP Stream
+        resized = cv2.resize(display_image, (640, 480))
+        _, encoded_img = cv2.imencode('.jpg', resized, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        img_data = encoded_img.tobytes()
+        chunks = [img_data[i:i + MAX_DGRAM - 8] for i in range(0, len(img_data), MAX_DGRAM - 8)]
+        for chunk in chunks:
+            header = struct.pack('>II', frame_num, len(chunks))
+            udp_sock.sendto(header + chunk, (UDP_IP, UDP_PORT))
+        frame_num += 1
 
-        # Show the result
-        cv2.imshow('Cube Detection', color_image)
-
-        if cv2.waitKey(1) & 0xFF == 27:  # ESC key to exit
-            break
+        time.sleep(1 / 15)  # 15 FPS max
 
 finally:
     pipeline.stop()
-    cv2.destroyAllWindows()
-
-
+    cleanup()
+    udp_sock.close()
+    print("[✔] Shutdown complete.")
