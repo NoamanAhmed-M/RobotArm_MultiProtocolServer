@@ -37,7 +37,7 @@ def get_average_depth(depth_frame, cx, cy, k=5):
             x, y = cx + dx, cy + dy
             if 0 <= x < depth_frame.get_width() and 0 <= y < depth_frame.get_height():
                 d = depth_frame.get_distance(x, y)
-                if 0.2 < d < 5:
+                if 0.2 < d < 2.0:
                     values.append(d)
     return np.mean(values) if values else 0
 
@@ -69,7 +69,6 @@ threading.Thread(target=start_tcp_receiver, daemon=True).start()
 frame_num = 0
 last_process_time = 0
 cooldown_timer = 0
-shape_detected_recently = False
 depth_buffer = deque(maxlen=5)
 
 try:
@@ -90,62 +89,73 @@ try:
         if now - last_process_time >= 0.5:
             last_process_time = now
             detected = False
+            cooldown_timer = max(0, cooldown_timer - 1)
 
-            if cooldown_timer > 0:
-                cooldown_timer -= 1
-
-            # Detect black cylinder
-            circles = cv2.HoughCircles(blurred, cv2.HOUGH_GRADIENT, 1, 40,
-                                       param1=50, param2=30, minRadius=15, maxRadius=60)
-            if circles is not None:
-                for circle in circles[0, :1]:
-                    cx, cy, radius = map(int, circle)
+            # === Detect black cylinder ===
+            _, dark_thresh = cv2.threshold(blurred, 50, 255, cv2.THRESH_BINARY_INV)
+            contours, _ = cv2.findContours(dark_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                perimeter = cv2.arcLength(cnt, True)
+                if perimeter == 0: continue
+                circularity = 4 * np.pi * area / (perimeter * perimeter)
+                if area > 300 and 0.7 < circularity < 1.3:
+                    (x, y, w, h) = cv2.boundingRect(cnt)
+                    cx, cy = x + w // 2, y + h // 2
                     distance = get_average_depth(depth_frame, cx, cy)
                     depth_buffer.append(distance)
-                    smoothed_depth = np.mean(depth_buffer)
+                    mean_depth = np.mean(depth_buffer)
+                    cv2.circle(display_image, (cx, cy), int(w/2), (0, 0, 255), 2)
+                    if should_move.is_set() and cooldown_timer == 0 and mean_depth > 0:
+                        width = color_image.shape[1]
+                        if cx < width // 3:
+                            turn_left_step(20, 50, 0.1)
+                        elif cx > 2 * width // 3:
+                            turn_right_step(20, 50, 0.1)
+                        else:
+                            move_forward_step(20, 50, 0.1)
+                        cooldown_timer = 2
+                        detected = True
+                        break
 
-                    if 0.2 < smoothed_depth < 2.0:
-                        cv2.circle(display_image, (cx, cy), radius, (0, 0, 255), 2)
-                        if should_move.is_set() and cooldown_timer == 0:
-                            w = color_image.shape[1]
-                            if cx < w // 3:
-                                turn_left_step(20, 50, 0.1)
-                            elif cx > 2 * w // 3:
-                                turn_right_step(20, 50, 0.1)
-                            else:
-                                move_forward_step(20, 50, 0.1)
-                            detected = True
-                            cooldown_timer = 2
-                            break
-
-            # Detect square with hole
+            # === Detect white square with a circular hole ===
             if not detected:
-                _, thresh = cv2.threshold(blurred, 200, 255, cv2.THRESH_BINARY)
-                contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                _, light_thresh = cv2.threshold(blurred, 200, 255, cv2.THRESH_BINARY)
+                contours, _ = cv2.findContours(light_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 for cnt in contours:
                     approx = cv2.approxPolyDP(cnt, 0.04 * cv2.arcLength(cnt, True), True)
                     area = cv2.contourArea(cnt)
                     if len(approx) == 4 and area > 1000:
                         x, y, w, h = cv2.boundingRect(approx)
                         cx, cy = x + w // 2, y + h // 2
-                        distance = get_average_depth(depth_frame, cx, cy)
-                        depth_buffer.append(distance)
-                        smoothed_depth = np.mean(depth_buffer)
+                        square_mask = np.zeros_like(gray)
+                        cv2.drawContours(square_mask, [cnt], -1, 255, -1)
+                        inner = cv2.bitwise_and(blurred, blurred, mask=square_mask)
+                        _, hole_thresh = cv2.threshold(inner, 60, 255, cv2.THRESH_BINARY_INV)
+                        holes, _ = cv2.findContours(hole_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-                        if 0.2 < smoothed_depth < 2.0:
-                            cv2.rectangle(display_image, (x, y), (x + w, y + h), (255, 0, 0), 2)
-                            if should_move.is_set() and cooldown_timer == 0:
-                                img_w = color_image.shape[1]
-                                if cx < img_w // 3:
-                                    turn_left_step(20, 50, 0.1)
-                                elif cx > 2 * img_w // 3:
-                                    turn_right_step(20, 50, 0.1)
-                                else:
-                                    move_forward_step(20, 50, 0.1)
-                                cooldown_timer = 2
-                                break
+                        for hcnt in holes:
+                            h_area = cv2.contourArea(hcnt)
+                            h_perim = cv2.arcLength(hcnt, True)
+                            if h_perim == 0: continue
+                            h_circ = 4 * np.pi * h_area / (h_perim * h_perim)
+                            if h_area < 500 and 0.7 < h_circ < 1.3:
+                                distance = get_average_depth(depth_frame, cx, cy)
+                                depth_buffer.append(distance)
+                                mean_depth = np.mean(depth_buffer)
+                                cv2.rectangle(display_image, (x, y), (x + w, y + h), (255, 0, 0), 2)
+                                if should_move.is_set() and cooldown_timer == 0 and mean_depth > 0:
+                                    img_w = color_image.shape[1]
+                                    if cx < img_w // 3:
+                                        turn_left_step(20, 50, 0.1)
+                                    elif cx > 2 * img_w // 3:
+                                        turn_right_step(20, 50, 0.1)
+                                    else:
+                                        move_forward_step(20, 50, 0.1)
+                                    cooldown_timer = 2
+                                    break
 
-        # === UDP Frame Streaming ===
+        # === UDP Stream ===
         resized = cv2.resize(display_image, (640, 480))
         _, encoded_img = cv2.imencode('.jpg', resized, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         img_data = encoded_img.tobytes()
@@ -155,7 +165,7 @@ try:
             udp_sock.sendto(header + chunk, (UDP_IP, UDP_PORT))
         frame_num += 1
 
-        time.sleep(1 / 15)  # Limit to 15 FPS
+        time.sleep(1 / 15)
 
 finally:
     pipeline.stop()
