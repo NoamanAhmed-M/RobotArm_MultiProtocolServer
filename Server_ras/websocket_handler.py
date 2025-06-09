@@ -14,49 +14,33 @@ class WebSocketHandler:
         return websockets.serve(
             self.handle_websocket_client,
             self.server.ws_host,
-            self.server.ws_port,
-            ping_interval=20,     # Heartbeat every 20s
-            ping_timeout=10,      # Close if no pong in 10s
-            close_timeout=5
+            self.server.ws_port
         )
 
     def create_video_server(self, video_ws_port):
         return websockets.serve(
             self.handle_video_websocket_client,
             self.server.ws_host,
-            video_ws_port,
-            ping_interval=20,
-            ping_timeout=10,
-            close_timeout=5
+            video_ws_port
         )
 
     async def handle_websocket_client(self, websocket):
         """Handles chat/control clients (e.g., Web, RobotArm)"""
-        name = None
         try:
-            # Receive base name from client
-            base_name = await websocket.recv()
-            if not base_name:
+            # First message: client name
+            name = await websocket.recv()
+            if not name:
                 await websocket.close()
                 return
 
-            # Assign unique name if base name already used
-            counter = 1
-            name = base_name
-            async with self.server.ws_lock:
-                existing_names = set(self.server.ws_clients.values())
-                while name in existing_names:
-                    name = f"{base_name}_{counter}"
-                    counter += 1
+            with self.server.ws_lock:
                 self.server.ws_clients[websocket] = name
-
             print(f"[WS] {name} connected")
 
             # Confirm connection
             await websocket.send(json.dumps({
                 "type": "status",
                 "msg": f"{name} connected successfully",
-                "name": name,
                 "timestamp": time.time()
             }))
 
@@ -73,26 +57,23 @@ class WebSocketHandler:
                         elif message_obj.get("value") is False:
                             print(f"[WS] ❌ OFF command received from {name}")
 
-                    # Echo back to sender
+                    # Optional: echo back
                     await websocket.send(json.dumps({
                         "type": "status",
                         "msg": f"Command received: {message_obj}",
                         "timestamp": time.time()
                     }))
 
-                    # Broadcast to other clients
-                    async with self.server.ws_lock:
-                        for client_ws, client_name in list(self.server.ws_clients.items()):
-                            if client_ws != websocket and not client_ws.closed:
-                                try:
-                                    await client_ws.send(json.dumps({
-                                        "type": "status",
-                                        "msg": f"{name} sent command: {message_obj}"
-                                    }))
-                                except Exception as send_err:
-                                    print(f"[WS ERROR] Failed to send to {client_name}: {send_err}")
+                    # Optional: broadcast to others
+                    with self.server.ws_lock:
+                        for client_ws, client_name in self.server.ws_clients.items():
+                            if client_ws != websocket:
+                                await client_ws.send(json.dumps({
+                                    "type": "status",
+                                    "msg": f"{name} sent command: {message_obj}"
+                                }))
 
-                    # Route the message
+                    # Route command to robot or internal logic
                     self.server.router.route(message_obj, name, sender_type="ws")
 
                 except Exception as e:
@@ -104,22 +85,18 @@ class WebSocketHandler:
             traceback.print_exc()
 
         finally:
-            try:
-                async with self.server.ws_lock:
-                    if websocket in self.server.ws_clients:
-                        disconnected_name = self.server.ws_clients.pop(websocket)
-                        print(f"[WS] {disconnected_name} disconnected")
-            except Exception as cleanup_error:
-                print(f"[WS ERROR] Cleanup failed: {cleanup_error}")
-                traceback.print_exc()
+            with self.server.ws_lock:
+                self.server.ws_clients.pop(websocket, None)
+            print(f"[WS] {name if 'name' in locals() else 'Unknown'} disconnected")
 
     async def handle_video_websocket_client(self, websocket):
-        """Handles video streaming clients"""
-        client_ip = websocket.remote_address[0]
+        """Sends test video frame to video canvas clients"""
         try:
+            client_ip = websocket.remote_address[0]
             print(f"[WS Video] Client connected from {client_ip}")
             self.server.video_ws_clients.add(websocket)
 
+            # Send confirmation
             await websocket.send(json.dumps({
                 "status": "connected",
                 "message": "Video stream connected",
