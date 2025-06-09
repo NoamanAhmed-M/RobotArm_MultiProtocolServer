@@ -6,11 +6,14 @@ from tcp_handler import TCPHandler
 from websocket_handler import WebSocketHandler
 from udp_handler import UDPHandler
 from status_router import MessageRouter  # ✅ Import the router
+from data_handler import DataHandler
+from http_api import HTTPAPIServer
 
 class MultiProtocolServer:
     def __init__(self, tcp_host='0.0.0.0', tcp_port=5555, 
-                 ws_host='0.0.0.0', ws_port=8765, 
-                 udp_host='0.0.0.0', udp_port=5005):
+                ws_host='0.0.0.0', ws_port=8765, 
+                udp_host='0.0.0.0', udp_port=5005,
+                http_host = '0.0.0.0', http_port = 8080):
         
         self.tcp_host = tcp_host
         self.tcp_port = tcp_port
@@ -46,8 +49,15 @@ class MultiProtocolServer:
 
         # Async loop will be stored later
         self.loop = None
+        
+        #added data handler and HTTP API
+        self.data_handler = DataHandler()
+        self.http_api = HTTPAPIServer (self.data_handler, http_host, http_port)
 
     def start(self):
+        """Start all servers"""
+        self.http_api.start()
+        
         """Start TCP (threaded) and async servers"""
         tcp_thread = threading.Thread(target=self.tcp_handler.start_tcp_server, daemon=True)
         tcp_thread.start()
