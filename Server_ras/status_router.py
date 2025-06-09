@@ -4,13 +4,12 @@ import asyncio
 class MessageRouter:
     def __init__(self, server):
         self.server = server
-
         # ✅ Define routing rules by client name
         self.routing_table = {
             "ESP_Matrix": ["Web"],
             "Web": ["RobotArm"],
             "ESP_Boolean": ["Web", "RobotArm"],
-            "ESP_Sensor": ["Web"]:, #added ESP32 routing
+            "ESP32_Sensor": ["Web"],  # Add ESP32 routing
             "RobotArm": ["Web"]
         }
 
@@ -20,9 +19,8 @@ class MessageRouter:
         """
         message_obj["sender"] = sender_name
         targets = self.routing_table.get(sender_name, [])
-
         print(f"[Router] Routing from '{sender_name}' → {targets}")
-
+        
         if not targets:
             print(f"[Router] ❌ No routing targets for sender: {sender_name}")
             return
@@ -37,13 +35,13 @@ class MessageRouter:
         try:
             loop = self.server.loop  # Must be set in server.py
             asyncio.run_coroutine_threadsafe(
-                self._send_to_web(message_obj),
+                self._send_to_web(message_obj),  # Fixed method name
                 loop
             )
         except Exception as e:
             print(f"[Router] ❌ Failed to forward to Web clients: {e}")
 
-    async def _send_to_web(self, message_obj):
+    async def _send_to_web(self, message_obj):  # Fixed method name
         with self.server.ws_lock:
             for ws, name in list(self.server.ws_clients.items()):
                 try:
